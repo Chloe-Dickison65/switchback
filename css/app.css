@@ -108,7 +108,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .days { display: flex; flex-direction: column; gap: 10px; }
 .day { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 12px 14px; }
 .day.today { border: 2px solid var(--accent); }
-.day.past { opacity: .7; }
+.day.past { background: #fafcfb; }
+.day.past .dname, .day.past .dnum { color: var(--muted); }
 .day-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .dname { font: 700 20px/1 var(--display); }
 .dnum { font: 500 20px/1 var(--display); color: var(--muted); }
@@ -212,3 +213,11 @@ summary { cursor: pointer; font-weight: 600; color: var(--accent-dark); padding:
 .toast { position: fixed; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 20; background: var(--text); color: #fff; padding: 10px 16px; border-radius: 999px; font-weight: 600; font-size: 14px; width: max-content; max-width: calc(100% - 32px); text-align: center; box-shadow: 0 8px 30px rgba(23,48,31,.25); }
 .hero-title { font: 700 24px/1.15 var(--display); }
 .ghost.setup { margin: 0 0 12px; }
+
+/* ---------- drag and drop ---------- */
+.wk { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.drag-ghost { position: fixed; z-index: 30; pointer-events: none; margin: 0; box-shadow: 0 12px 30px rgba(23,48,31,.25); transition: none; }
+.drag-source { opacity: .35; }
+body.dragging { cursor: grabbing; }
+.day.drop-target { border: 2px dashed var(--accent); background: var(--accent-soft); }
+.add.log { width: auto; height: 32px; padding: 0 12px; border-radius: 99px; gap: 4px; display: inline-flex; align-items: center; font-weight: 600; font-size: 13px; }

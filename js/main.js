@@ -4,6 +4,7 @@ import { TYPES, TYPE_KEYS, workout, warningsFor, isOfficeDay, starterWeek, summa
 import * as Cal from './calendar.js';
 import * as Coach from './coach.js';
 import * as P from './progress.js';
+import { enableDrag } from './drag.js';
 
 const ui = {
   view: 'week',
@@ -146,6 +147,22 @@ function addLogEntry(e) {
   else if (!list.some((w) => w.type === e.type && w.status === 'done')) list.push(workout({ type: e.type, source: 'logged', ...fields }));
 }
 
+// Show the coach's words as they arrive, without re-rendering the whole screen.
+function liveReplyHtml() {
+  return ui.liveReply
+    ? `<p>${esc(ui.liveReply)}</p><div class="msg-meta"><span>Updating your plan…</span></div>`
+    : '<i></i><i></i><i></i>';
+}
+
+function showLiveReply(text) {
+  ui.liveReply = text;
+  const el = document.getElementById('live');
+  if (!el) return;
+  el.classList.remove('typing');
+  el.innerHTML = liveReplyHtml();
+  scrollChat();
+}
+
 async function sendToCoach(text) {
   text = text.trim();
   if (!text || ui.busy) return;
@@ -158,7 +175,10 @@ async function sendToCoach(text) {
   render();
   try {
     if (Cal.isConnected() && !calendarFor(ws)) await refreshCalendar(ws);
-    const res = await Coach.ask({ weekStart: ws, text, calendar: calendarFor(ws), isOffice: officeFn(ws), warnings: currentWarnings(ws) });
+    const res = await Coach.ask({
+      weekStart: ws, text, calendar: calendarFor(ws), isOffice: officeFn(ws), warnings: currentWarnings(ws),
+      onReply: showLiveReply,
+    });
     const chat = (db.chats[ws] ||= []);
     chat.push({ role: 'user', text, ts: Date.now() });
     chat.push({ role: 'assistant', text: res.reply, ts: Date.now(), cost: res.cost, planChanged: !!res.days, logged: res.logEntries.length });
@@ -176,6 +196,7 @@ async function sendToCoach(text) {
   } finally {
     ui.busy = false;
     ui.pending = '';
+    ui.liveReply = '';
     render();
     scrollChat();
   }
@@ -324,16 +345,18 @@ function weekView() {
     const dayWarn = warnings.filter((w) => w.date === date);
     const office = isOfficeDay(date, db.settings, cal);
     return `
-      <section class="day ${date === today ? 'today' : ''} ${date < today ? 'past' : ''}">
+      <section class="day ${date === today ? 'today' : ''} ${date < today ? 'past' : ''}" data-date="${date}">
         <div class="day-head">
           <div class="dname">${D.DOW[D.dow(date)]}</div>
           <div class="dnum">${D.parse(date).getDate()}</div>
           ${date === today ? '<span class="badge hot">Today</span>' : ''}
           ${office ? `<span class="badge">${ic('building')} Office</span>` : ''}
-          <button class="add" data-act="add" data-date="${date}" aria-label="Add to ${D.DOW[D.dow(date)]}">${ic('plus')}</button>
+          ${date < today
+            ? `<button class="add log" data-act="add" data-date="${date}">${ic('plus')} Log</button>`
+            : `<button class="add" data-act="add" data-date="${date}" aria-label="Add to ${D.DOW[D.dow(date)]}">${ic('plus')}</button>`}
         </div>
         ${events.length ? `<ul class="events">${events.slice(0, 3).join('')}${events.length > 3 ? `<li class="more">+${events.length - 3} more</li>` : ''}</ul>` : ''}
-        <div class="wks">${list.map((w) => workoutButton(w, date)).join('') || `<div class="empty">${office ? 'Office day — no workouts' : 'Nothing planned'}</div>`}</div>
+        <div class="wks">${list.map((w) => workoutButton(w, date)).join('') || `<div class="empty">${office ? 'Office day — no workouts' : date < today ? 'Nothing logged' : 'Nothing planned'}</div>`}</div>
         ${dayWarn.map((w) => `<div class="warn-line">${ic('alert-triangle')} ${esc(w.text)}</div>`).join('')}
       </section>`;
   }).join('');
@@ -345,6 +368,7 @@ function weekView() {
     ${db.settings.profile.trim() ? '' : `<button class="ghost setup" data-act="nav" data-view="settings">${ic('user')} Tell your coach about your routine</button>`}
     ${general.map((w) => `<div class="warn-line block">${ic('alert-triangle')} ${esc(w.text)}</div>`).join('')}
     <div class="days">${days}</div>
+    ${planned && !db.settings.dragHintSeen ? '<p class="hint center">Tip: press and hold a workout to drag it to another day.</p>' : ''}
     ${planned ? `<button class="ghost" data-act="nav" data-view="coach">${ic('message-circle')} Talk to your coach</button>` : ''}`;
 }
 
@@ -376,7 +400,7 @@ function coachView() {
           ${hasKey ? '' : '<p class="muted">Add your Anthropic API key in <button class="link" data-act="nav" data-view="settings">Settings</button> to turn me on.</p>'}
         </div>` : ''}
       ${bubbles}
-      ${ui.pending ? `<div class="msg user"><p>${esc(ui.pending)}</p></div><div class="msg assistant typing"><i></i><i></i><i></i></div>` : ''}
+      ${ui.pending ? `<div class="msg user"><p>${esc(ui.pending)}</p></div><div class="msg assistant ${ui.liveReply ? '' : 'typing'}" id="live">${liveReplyHtml()}</div>` : ''}
       ${ui.chatError ? `<div class="warn-line block">${ic('alert-triangle')} ${esc(ui.chatError)}</div>` : ''}
     </div>
     <div class="composer">
@@ -485,7 +509,7 @@ function sheet() {
   const dayName = `${D.DOW_LONG[D.dow(s.date)]}, ${D.shortDate(s.date)}`;
   let body;
   if (s.kind === 'add') {
-    body = `<div class="sheet-kicker">Add · ${esc(dayName)}</div>${workoutForm(workout({ type: s.type || 'run', title: '' }), s.date, true)}`;
+    body = `<div class="sheet-kicker">${s.date < D.todayIso() ? 'Log' : 'Add'} · ${esc(dayName)}</div>${workoutForm(workout({ type: s.type || 'run', title: '' }), s.date, true)}`;
   } else {
     const w = findWorkout(s.date, s.id);
     if (!w) { ui.sheet = null; return ''; }
@@ -568,6 +592,14 @@ function readForm(form) {
   };
 }
 
+function moveWorkout(date, id, to) {
+  const ws = D.mondayOf(date);
+  const from = dayWorkouts(ws, date);
+  const w = from.splice(from.findIndex((x) => x.id === id), 1)[0];
+  dayWorkouts(D.mondayOf(to), to).push(w);
+  changed(ws, w.status === 'planned' ? `Moved ${w.title} from ${D.DOW[D.dow(date)]} to ${D.DOW[D.dow(to)]}.` : '');
+}
+
 const actions = {
   nav: (el) => { ui.view = el.dataset.view; ui.sheet = null; render(); if (ui.view === 'coach') scrollChat(); },
   week: (el) => {
@@ -614,12 +646,8 @@ const actions = {
     const { date, id } = ui.sheet;
     const to = el.dataset.to;
     if (to === date) return;
-    const ws = D.mondayOf(date);
-    const from = dayWorkouts(ws, date);
-    const w = from.splice(from.findIndex((x) => x.id === id), 1)[0];
-    dayWorkouts(ws, to).push(w);
+    moveWorkout(date, id, to);
     ui.sheet = { ...ui.sheet, date: to };
-    changed(ws, `Moved ${w.title} from ${D.DOW[D.dow(date)]} to ${D.DOW[D.dow(to)]}.`);
     toast(`Moved to ${D.DOW_LONG[D.dow(to)]}`);
   },
   delete: () => {
@@ -749,7 +777,20 @@ document.addEventListener('toggle', (e) => {
 // ---------- boot ----------
 
 render();
+Coach.warmUp();
+enableDrag((from, id, to) => {
+  moveWorkout(from, id, to);
+  db.settings.dragHintSeen = true;
+  save();
+  toast(`Moved to ${D.DOW_LONG[D.dow(to)]}`);
+});
 if (Cal.isConnected()) refreshCalendar(ui.weekStart);
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Service worker failed', e));
+  // When an update finishes installing, reload once so it takes effect right away.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloaded && !ui.busy) { reloaded = true; location.reload(); }
+  });
 }

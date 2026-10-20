@@ -53,7 +53,7 @@ Coaching rules:
 How to answer:
 - reply: plain text, energetic and warm, at most 70 words. No markdown. When planning a new week, give a 1–2 sentence overview and ask at most 2 quick questions if something important is unknown (e.g. how they feel after a big hike, what the weekend hike might be).
 - plan_changed: true only if you are returning an updated plan.
-- days: if plan_changed, all 7 days of the target week in order, Monday first. Copy past days (before TODAY) and anything marked done/skipped exactly as given. Use an empty workouts list for days with nothing planned. If plan_changed is false, return an empty list.
+- days: if plan_changed, only the days you are changing, each with its complete new list of workouts (use an empty list to clear a day). Leave out days that stay the same. Never change days before TODAY or anything marked done/skipped. When planning a week from scratch, include every day from TODAY on. If plan_changed is false, return an empty list.
 - log_entries: activities they say they already did that are not in RECENT ACTIVITY or CURRENT PLAN as done (e.g. "I hiked 4 mi with 2,000 ft yesterday"). feel is 1 (wrecked) to 5 (great), or null if not said. Otherwise an empty list.
 - Titles are short (2–3 words, e.g. "Easy run", "Tempo run", "Bodyweight strength", "Lunch walk"). detail is one concrete line.`;
 
@@ -159,8 +159,26 @@ function buildContext({ weekStart, calendar, isOffice, warnings }) {
   ].filter(Boolean).join('\n\n');
 }
 
+// Load the SDK in the background when the app opens, so the first message isn't slowed down.
+export function warmUp() {
+  if (db.settings.anthropicKey.trim() && !sdk) client().catch(() => {});
+}
+
+// The reply is the first field of the JSON, so it can be shown while the plan is still being written.
+function partialReply(json) {
+  const m = json.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)/);
+  if (!m) return '';
+  const body = m[1].replace(/\\u?[0-9a-fA-F]{0,3}$|\\$/, ''); // drop a half-received escape
+  try {
+    return JSON.parse(`"${body}"`);
+  } catch {
+    return body;
+  }
+}
+
 // Sends one message to the coach. Returns { reply, days, logEntries, cost }.
-export async function ask({ weekStart, text, calendar, isOffice, warnings }) {
+// onReply(text) is called with the reply so far as it streams in.
+export async function ask({ weekStart, text, calendar, isOffice, warnings, onReply = () => {} }) {
   if (!db.settings.anthropicKey.trim()) throw new Error('Add your Anthropic API key in Settings to use the coach.');
   if (!canAfford()) {
     throw new BudgetError(`Weekly AI budget reached (${cents(spentThisWeek())} of ${cents(db.settings.weeklyBudget)}). The coach is back Monday — you can still edit the plan by hand.`);
@@ -176,13 +194,20 @@ export async function ask({ weekStart, text, calendar, isOffice, warnings }) {
   const { Anthropic, client: c } = await client();
   let response;
   try {
-    response = await c.messages.create({
+    const stream = c.messages.stream({
       model: MODEL,
       max_tokens: MAX_TOKENS,
       system: SYSTEM,
       output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
       messages,
     });
+    let soFar = '';
+    stream.on('text', (delta) => {
+      soFar += delta;
+      const reply = partialReply(soFar);
+      if (reply) onReply(reply);
+    });
+    response = await stream.finalMessage();
   } catch (e) {
     if (e instanceof Anthropic.AuthenticationError) throw new Error('Anthropic rejected the API key. Check it in Settings.');
     if (e instanceof Anthropic.RateLimitError) throw new Error('Anthropic is rate-limiting right now. Try again in a minute.');
