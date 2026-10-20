@@ -1,9 +1,9 @@
 // Offline support: serve the app from cache, refresh it in the background.
 // Bump VERSION when you deploy so phones pick up the new files.
-const VERSION = 'switchback-v11';
+const VERSION = 'switchback-v12';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'js/main.js', 'js/store.js', 'js/dates.js', 'js/rules.js', 'js/calendar.js', 'js/coach.js', 'js/progress.js', 'js/drag.js', 'js/weather.js',
+  'js/main.js', 'js/store.js', 'js/dates.js', 'js/rules.js', 'js/calendar.js', 'js/coach.js', 'js/progress.js', 'js/drag.js', 'js/weather.js', 'js/today.js', 'js/html.js', 'js/celebrate.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 // Third-party files that never change for a given URL (pinned SDK, fonts).

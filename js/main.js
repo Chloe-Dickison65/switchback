@@ -6,6 +6,9 @@ import * as Coach from './coach.js';
 import * as P from './progress.js';
 import { enableDrag } from './drag.js';
 import * as W from './weather.js';
+import { esc, ic } from './html.js';
+import { celebrate, pick } from './celebrate.js';
+import * as T from './today.js';
 
 const ui = {
   view: 'week',
@@ -18,11 +21,13 @@ const ui = {
   toast: '',
   calState: '',  // '' | 'loading' | 'error'
   syncing: false,
+  checkinDate: null, // Today tab: which day you're checking in for (null = today)
+  ciPick: null,      // the one thing you've tapped but not committed to yet
+  ciCustom: false,
+  ciMonth: null,     // 'YYYY-MM' shown in the month view
 };
 
 const $app = document.getElementById('app');
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ic = (name) => `<i class="ti ti-${name}" aria-hidden="true"></i>`;
 const TRAIL_MARK = '<svg viewBox="0 0 512 512" aria-hidden="true"><path d="M150 388H342A60 60 0 0 0 342 268H170A60 60 0 0 1 170 148H342" fill="none" stroke="#1f7a4d" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/><circle cx="342" cy="148" r="46" fill="#f5b400"/></svg>';
 const FEELS = ['😵', '😓', '🙂', '😄', '🔥'];
 
@@ -235,7 +240,7 @@ function scrollChat() {
 
 function header() {
   const ws = ui.weekStart;
-  const showWeek = ui.view !== 'settings';
+  const showWeek = ui.view === 'week' || ui.view === 'coach';
   const calChip = !db.settings.googleClientId ? '' : Cal.isConnected()
     ? `<button class="chip ${ui.syncing || ui.calState === 'loading' ? 'pulse' : ''}" data-act="cal-refresh" title="Refresh calendar">${ic('calendar')} ${ui.syncing ? 'Syncing' : ui.calState === 'loading' ? 'Loading' : getWeek(ws).synced || !hasPlan(ws) ? 'Synced' : 'Sync'}</button>`
     : `<button class="chip warn" data-act="cal-connect">${ic('calendar')} Connect</button>`;
@@ -353,28 +358,12 @@ function celebrateLockIn(date) {
     return `<li>${ic(TYPES[w.type].icon)} ${esc(w.title)} · ${D.prettyTime(workoutWindow(w).start)}${f ? ` · ${f.temp}°` : ''}</li>`;
   }).join('');
   const { locked, total } = lockedCount(ws);
-  const colors = ['var(--accent)', 'var(--sun)', 'var(--run)', 'var(--climb)', 'var(--walk)'];
-  const confetti = Array.from({ length: 36 }, (_, i) => {
-    const angle = (i / 36) * Math.PI * 2 + Math.random() * 0.4;
-    const dist = 120 + Math.random() * 140;
-    return `<i style="--x:${Math.cos(angle) * dist}px;--y:${Math.sin(angle) * dist - 60}px;--r:${Math.random() * 540 - 270}deg;background:${colors[i % colors.length]};animation-delay:${Math.random() * 0.12}s"></i>`;
-  }).join('');
-  const el = document.createElement('div');
-  el.className = 'lockin';
-  el.innerHTML = `
-    <div class="lockin-card">
-      <div class="confetti">${confetti}</div>
-      <svg class="lockin-check" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
-      <h2>${D.DOW_LONG[D.dow(date)]} is locked in!</h2>
-      <ul>${lines}</ul>
-      <p class="lockin-sub">${LOCK_LINES[Math.floor(Math.random() * LOCK_LINES.length)]}</p>
-      <p class="lockin-count">${ic('lock')} ${locked} of ${total} ${total === 1 ? 'day' : 'days'} locked in this week</p>
-    </div>`;
-  document.body.appendChild(el);
-  navigator.vibrate?.([30, 60, 30, 60, 90]);
-  const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 250); };
-  el.addEventListener('click', close);
-  setTimeout(close, 3200);
+  celebrate({
+    title: `${D.DOW_LONG[D.dow(date)]} is locked in!`,
+    lines,
+    sub: pick(LOCK_LINES),
+    badge: `${locked} of ${total} ${total === 1 ? 'day' : 'days'} locked in this week`,
+  });
 }
 
 // The selected day as a small calendar: hours down the side, busy time in gray,
@@ -577,10 +566,11 @@ function settingsView() {
         </label>
         <div class="row">
           ${connected
-            ? '<button class="btn" data-act="cal-disconnect">Disconnect</button><button class="btn" data-act="sunday">Add Sunday reminder</button>'
+            ? '<button class="btn" data-act="cal-disconnect">Disconnect</button><button class="btn" data-act="sunday">Add Sunday reminder</button><button class="btn" data-act="checkin-reminder">Add 8pm check-in reminder</button>'
             : `<button class="btn primary" data-act="cal-connect" ${s.googleClientId ? '' : 'disabled'}>Connect Google Calendar</button>`}
         </div>
         ${s.sundayReminderId ? '<p class="hint">✓ Sunday 6pm “Plan your week” reminder is on your Workouts calendar.</p>' : ''}
+        ${s.checkinReminderId ? '<p class="hint">✓ Daily 8pm “one thing” check-in reminder is on your Workouts calendar.</p>' : ''}
         <label>Remind me before workouts (minutes)
           <input type="number" min="0" step="5" data-setting="reminderMinutes" value="${s.reminderMinutes}">
         </label>
@@ -687,7 +677,7 @@ function sheet() {
 
 function nav() {
   const item = (view, icon, label) => `<button class="${ui.view === view ? 'on' : ''}" data-act="nav" data-view="${view}"><span>${ic(icon)}</span>${label}</button>`;
-  return `<nav class="tabs">${item('week', 'calendar-week', 'Week')}${item('coach', 'message-circle', 'Coach')}${item('settings', 'settings', 'Settings')}</nav>`;
+  return `<nav class="tabs">${item('week', 'calendar-week', 'Week')}${item('today', 'sun', 'Today')}${item('coach', 'message-circle', 'Coach')}${item('settings', 'settings', 'Settings')}</nav>`;
 }
 
 function render({ background = false } = {}) {
@@ -703,7 +693,7 @@ function render({ background = false } = {}) {
     : null;
   const sheetScroll = document.querySelector('.sheet')?.scrollTop;
 
-  const view = ui.view === 'coach' ? coachView() : ui.view === 'settings' ? settingsView() : weekView();
+  const view = ui.view === 'coach' ? coachView() : ui.view === 'settings' ? settingsView() : ui.view === 'today' ? T.todayView(ui) : weekView();
   $app.innerHTML = `
     <div id="hdr">${header()}</div>
     <main class="view-${ui.view}">${view}</main>
@@ -766,7 +756,79 @@ function moveWorkout(date, id, to) {
   changed(ws, w.status === 'planned' ? `Moved ${w.title} from ${D.DOW[D.dow(date)]} to ${D.DOW[D.dow(to)]}.` : '');
 }
 
+
+// ---------- daily check-in ----------
+
+const COMMIT_LINES = ['A promise to yourself.', 'Future you says thanks.', 'Small things, every day.', 'That\'s the spirit.'];
+const DONE_LINES = ['You showed up for yourself.', 'That counts. Every bit of it.', 'Nice. Keep the streak going.', 'One more good day on the trail.'];
+
+function commitCheckin(choice) {
+  if (!choice) return;
+  const date = ui.checkinDate || D.todayIso();
+  T.setCheckin(date, { ...choice, status: 'committed', committedAt: Date.now() });
+  ui.ciPick = null;
+  ui.ciCustom = false;
+  render();
+  celebrate({
+    title: date === D.todayIso() ? 'You\'re committed!' : 'Committed',
+    lines: `<li>${ic(choice.icon)} ${esc(choice.label)}</li>`,
+    sub: pick(COMMIT_LINES),
+  });
+}
+
+function finishCheckin() {
+  const date = ui.checkinDate || D.todayIso();
+  const c = T.checkinFor(date);
+  // Committing to a workout and doing it marks the workout done too.
+  const w = c?.workoutId && findWorkout(date, c.workoutId);
+  if (w && w.status !== 'done') {
+    w.status = 'done';
+    changed(D.mondayOf(date));
+  }
+  T.setCheckin(date, { status: 'done', doneAt: Date.now() });
+  render();
+  const n = T.streak();
+  celebrate({
+    title: 'You did it!',
+    lines: `<li>${ic(c.icon)} ${esc(c.label)}</li>`,
+    sub: pick(DONE_LINES),
+    badge: n ? `${T.streakText(n)} showing up for yourself` : '',
+    badgeIcon: 'flame',
+  });
+}
+
 const actions = {
+  'ci-pick': (el) => {
+    const date = ui.checkinDate || D.todayIso();
+    if (el.dataset.workout) {
+      const w = T.workoutsOn(date).find((x) => x.id === el.dataset.workout);
+      ui.ciPick = { label: w.title, icon: TYPES[w.type].icon, category: 'move', workoutId: w.id };
+    } else {
+      ui.ciPick = { ...T.PRESETS[Number(el.dataset.preset)] };
+    }
+    ui.ciCustom = false;
+    render();
+  },
+  'ci-custom': () => { ui.ciCustom = !ui.ciCustom; ui.ciPick = null; render(); },
+  'ci-commit': () => commitCheckin(ui.ciPick),
+  'ci-done': finishCheckin,
+  'ci-skip': () => { T.setCheckin(ui.checkinDate || D.todayIso(), { status: 'skipped' }); render(); },
+  'ci-change': () => { T.clearCheckin(ui.checkinDate || D.todayIso()); render(); },
+  'ci-undo': () => { T.setCheckin(ui.checkinDate || D.todayIso(), { status: 'committed' }); render(); },
+  'ci-mood': (el) => { T.setCheckin(ui.checkinDate || D.todayIso(), { mood: Number(el.dataset.mood) }); render(); },
+  'ci-date': (el) => {
+    ui.checkinDate = el.dataset.date && el.dataset.date !== D.todayIso() ? el.dataset.date : null;
+    ui.ciPick = null;
+    ui.ciCustom = false;
+    render();
+    scrollTo(0, 0);
+  },
+  'ci-month': (el) => {
+    const [y, m] = (ui.ciMonth || D.todayIso().slice(0, 7)).split('-').map(Number);
+    const d = new Date(y, m - 1 + Number(el.dataset.delta), 1);
+    ui.ciMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    render();
+  },
   nav: (el) => { ui.view = el.dataset.view; ui.sheet = null; render(); if (ui.view === 'coach') scrollChat(); },
   week: (el) => {
     ui.weekStart = D.addDays(ui.weekStart, Number(el.dataset.delta));
@@ -831,6 +893,15 @@ const actions = {
     if (hasPlan(ui.weekStart) && !getWeek(ui.weekStart).synced) syncNow(ui.weekStart);
   },
   'cal-disconnect': () => { Cal.disconnect(); toast('Disconnected from Google Calendar.'); },
+  'checkin-reminder': async () => {
+    try {
+      await Cal.ensureCheckinReminder(location.origin + location.pathname);
+      toast('Daily check-in reminder added');
+      render();
+    } catch (e) {
+      toast(e.message);
+    }
+  },
   sunday: async () => {
     try {
       await Cal.ensureSundayReminder(location.origin + location.pathname);
@@ -915,6 +986,12 @@ document.addEventListener('submit', (e) => {
   const form = e.target;
   if (form.dataset.form === 'chat') return sendToCoach(form.text.value);
   if (form.dataset.form === 'weather') return setWeatherPlace(form.place.value);
+  if (form.dataset.form === 'ci-custom') {
+    const label = form.label.value.trim();
+    if (!label) return toast('Name your one thing first.');
+    const category = new FormData(form).get('category') || 'create';
+    return commitCheckin({ label, icon: T.CATEGORY_ICON[category], category });
+  }
   const data = readForm(form);
   const { date } = ui.sheet;
   const ws = D.mondayOf(date);
@@ -941,6 +1018,9 @@ document.addEventListener('input', (e) => {
     ui.draft = el.value;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }
+  if (el.dataset.ciNote !== undefined) {
+    T.setCheckin(ui.checkinDate || D.todayIso(), { note: el.value });
   }
   if (el.dataset.wfield) {
     const w = findWorkout(ui.sheet.date, ui.sheet.id);

@@ -234,10 +234,10 @@ export async function syncWeek(weekStart, week) {
 
 const sameTime = (a, b) => new Date(a.dateTime).getTime() === new Date(b.dateTime).getTime();
 
-// A weekly "plan your week" event on Sunday evenings.
-export async function ensureSundayReminder(appUrl) {
+// A repeating reminder event on the Workouts calendar; `key` is the setting that remembers its id.
+async function ensureRepeatingReminder({ key, summary, appUrl, firstDate, time, rrule }) {
   const calId = await ensureWorkoutsCalendar();
-  const id = db.settings.sundayReminderId;
+  const id = db.settings[key];
   if (id) {
     try {
       const ev = await api(`/calendars/${enc(calId)}/events/${enc(id)}`);
@@ -246,21 +246,38 @@ export async function ensureSundayReminder(appUrl) {
       if (e.status !== 404 && e.status !== 410) throw e;
     }
   }
-  const today = D.todayIso();
-  const sunday = D.addDays(today, (7 - D.dow(today)) % 7);
+  const [h, m] = time.split(':').map(Number);
+  const end = `${String(h).padStart(2, '0')}:${String(m + 15).padStart(2, '0')}`;
   const ev = await api(`/calendars/${enc(calId)}/events`, {
     method: 'POST',
     body: {
-      summary: '🥾 Plan your week in Switchback',
+      summary,
       description: `Open Switchback: ${appUrl}`,
-      start: { dateTime: `${sunday}T18:00:00`, timeZone: TZ },
-      end: { dateTime: `${sunday}T18:15:00`, timeZone: TZ },
-      recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=SU'],
+      start: { dateTime: `${firstDate}T${time}:00`, timeZone: TZ },
+      end: { dateTime: `${firstDate}T${end}:00`, timeZone: TZ },
+      recurrence: [rrule],
       reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 0 }] },
       transparency: 'transparent',
       extendedProperties: { private: { switchbackReminder: '1' } },
     },
   });
-  db.settings.sundayReminderId = ev.id;
+  db.settings[key] = ev.id;
   save();
+}
+
+// A weekly "plan your week" event on Sunday evenings.
+export function ensureSundayReminder(appUrl) {
+  const today = D.todayIso();
+  return ensureRepeatingReminder({
+    key: 'sundayReminderId', summary: '🥾 Plan your week in Switchback', appUrl,
+    firstDate: D.addDays(today, (7 - D.dow(today)) % 7), time: '18:00', rrule: 'RRULE:FREQ=WEEKLY;BYDAY=SU',
+  });
+}
+
+// A daily 8pm nudge to check in on your one thing.
+export function ensureCheckinReminder(appUrl) {
+  return ensureRepeatingReminder({
+    key: 'checkinReminderId', summary: '☀️ Did you do your one thing today?', appUrl,
+    firstDate: D.todayIso(), time: '20:00', rrule: 'RRULE:FREQ=DAILY',
+  });
 }

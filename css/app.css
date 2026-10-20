@@ -295,3 +295,54 @@ body.dragging { cursor: grabbing; }
   100% { transform: translate(var(--x), calc(var(--y) + 120px)) rotate(var(--r)); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .confetti { display: none; } .lockin-card, .lockin-check path { animation: none; stroke-dashoffset: 0; } }
+
+/* ---------- Today: daily check-in ---------- */
+.today-head { display: flex; align-items: baseline; gap: 10px; margin: 12px 0 10px; }
+.today-head h2 { font: 700 30px/1.1 var(--display); margin: 0; }
+.today-head span { color: var(--muted); font-weight: 600; }
+.today-head .link { margin-left: auto; font-size: 13px; }
+.ci-card { padding: 18px 16px; }
+.ci-card.center { text-align: center; }
+.ci-q { font: 700 21px/1.2 var(--display); margin: 0 0 6px; }
+.ci-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.ci-chip { font-size: 13.5px; padding: 8px 12px; }
+.ci-chip .ti { color: var(--accent); font-size: 16px; }
+.ci-chip.on .ti { color: #fff; }
+.ci-custom input[name=label] { width: 100%; padding: 11px 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); font-size: 15px; margin: 4px 0 8px; }
+.ci-big { display: flex; align-items: center; justify-content: center; gap: 8px; font: 700 24px/1.2 var(--display); margin: 4px 0; }
+.ci-big .ti { color: var(--c); font-size: 26px; }
+.ci-big.muted { color: var(--muted); }
+.ci-sub { color: var(--accent-dark); font-weight: 600; margin: 6px 0 12px; }
+.ci-card .row { justify-content: center; }
+.ci-card .row .btn { flex: 1; }
+.center-row { gap: 16px; }
+.ci-check { width: 52px; height: 52px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 28px; margin: 0 auto 8px; animation: popin .45s cubic-bezier(.2, 1.4, .4, 1); }
+.ci-moods { display: flex; justify-content: center; gap: 6px; margin-bottom: 10px; }
+.ci-mood { width: 48px; height: 44px; border-radius: 12px; background: var(--surface2); color: var(--accent-dark); font-size: 24px; display: grid; place-items: center; }
+.ci-mood.on { background: var(--sun); color: #5a3f00; }
+.ci-note { width: 100%; padding: 10px 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); font-size: 14px; margin-bottom: 8px; }
+.ci-week { margin: 14px 0; text-align: center; }
+.ci-dots { display: flex; justify-content: center; gap: 8px; }
+.ci-dot { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.ci-dot span { width: 34px; height: 34px; border-radius: 50%; background: var(--surface); border: 1.5px solid var(--line); display: grid; place-items: center; color: #fff; font-size: 17px; }
+.ci-dot.done span { background: var(--c); border-color: var(--c); }
+.ci-dot.sel span { outline: 2px solid var(--text); outline-offset: 2px; }
+.ci-dot.future span { opacity: .45; }
+.ci-dot small { font-size: 11px; color: var(--muted); font-weight: 600; }
+.ci-streak { display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 600; color: var(--accent-dark); margin: 10px 0 0; }
+.ci-streak .ti { color: #e07a1f; font-size: 18px; }
+.ci-month-head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.ci-month-head b { font: 700 18px/1 var(--display); min-width: 92px; text-align: center; }
+.ci-month-count { margin-left: auto; color: var(--muted); font-weight: 600; font-size: 13px; }
+.icon-sm { width: 30px; height: 30px; border-radius: 50%; background: var(--surface2); color: var(--accent-dark); display: grid; place-items: center; font-size: 16px; }
+.ci-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.ci-wd { text-align: center; font-size: 11px; color: var(--muted); font-weight: 600; }
+.ci-cell { aspect-ratio: 1; border-radius: 9px; background: var(--bg); border: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--muted); }
+.ci-cell.done { background: var(--c); border-color: var(--c); color: #fff; }
+.ci-cell.today { outline: 2px solid var(--text); outline-offset: 1px; }
+.ci-cell.sel:not(.today) { outline: 2px dashed var(--accent); outline-offset: 1px; }
+.ci-cell.future { opacity: .4; }
+.ci-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.ci-legend span { display: flex; align-items: center; gap: 4px; }
+.ci-legend i { width: 9px; height: 9px; border-radius: 50%; }
+.ci-tally { margin: 10px 0 0; font-weight: 600; }

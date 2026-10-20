@@ -4,6 +4,7 @@ import * as D from './dates.js';
 import { db, save } from './store.js';
 import { TYPE_KEYS, summary, weekRunMiles } from './rules.js';
 import { daySummary } from './weather.js';
+import { recentForCoach } from './today.js';
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm';
 const MODEL = 'claude-haiku-5-5';
@@ -167,6 +168,7 @@ function buildContext({ weekStart, calendar, isOffice, warnings }) {
     db.settings.weatherPlace && db.weather
       ? `WEATHER (${db.settings.weatherPlace.name}; prefer dry, mild hours for outdoor runs, hikes and walks):\n${D.weekDates(weekStart).map((d) => `${D.DOW[D.dow(d)]} ${d}: ${daySummary(d) || 'no forecast yet'}`).join('\n')}`
       : '',
+    recentForCoach() ? `ONE THING FOR ME (their daily self-care check-in, last 7 days; cheer them on, don't nag):\n${recentForCoach()}` : '',
     `CURRENT PLAN:\n${D.weekDates(weekStart).map((d) => describeDay(d, week.days[d])).join('\n')}`,
     warnings.length ? `RULE CHECK WARNINGS:\n${warnings.map((w) => `- ${w.text}`).join('\n')}` : '',
     week.manualChange ? `CHANGES I MADE MYSELF (keep these): ${week.manualChange}` : '',
