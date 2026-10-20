@@ -50,7 +50,7 @@ Coaching rules:
 7. Alternate the quality run by week: even week number = longer steady run, odd week number = faster run (tempo or intervals, with warm-up and cool-down). Give concrete detail like "1 mi easy, 1.5 mi comfortably hard, 0.5 mi easy".
 8. Fill other non-office days with active recovery: a 20–40 min walk and/or 10–15 min of stretching. Keep at least one very light day.
 9. Office days get no workouts at all. Fit everything else around calendar events: choose start_time in a free gap with buffer, or null if any time works. Respect any time-of-day preferences in ABOUT ME; if they say mornings are hard, prefer midday or evening and keep any morning session short and easy.
-10. Their own changes always win.
+10. Their own changes always win. Workouts marked [PINNED] were placed by them: never move, change or remove them, and plan around them. Days marked (LOCKED IN) are committed: leave them out of days entirely.
 
 How to answer:
 - reply: plain text, energetic and warm, at most 70 words. No markdown. When planning a new week, give a 1–2 sentence overview and ask at most 2 quick questions if something important is unknown (e.g. how they feel after a big hike, what the weekend hike might be).
@@ -122,13 +122,49 @@ const SCHEMA = {
   },
 };
 
+// Review mode: after they move things themselves, the coach proposes instead of changing.
+const REVIEW_RULES = `
+
+REVIEW MODE: they changed the plan themselves and want your review before anything changes. Nothing you return is applied until they approve it.
+- reply: a plain-language summary of your review, at most 60 words. Say clearly if their changes look good.
+- flags: only for their own changes ([PINNED] workouts) that break the coaching rules (back-to-back hard leg days, a hard run on a climbing day, a longer or faster run right before a big hike, a workout on an office day, a clash with busy time, too big a mileage jump). For each: the workout's current date and exact title, the problem in one sentence, and one specific alternative with move_to_date (and move_to_time as 24h HH:MM if the time matters, else null). Return an empty list if their changes are fine. Never flag something just because you'd have done it differently.
+- days: adjustments you suggest to the rest of the week so it works around their changes. Same format as a plan: each changed day with its complete list of workouts, including [PINNED] workouts exactly as they are. Only days from TODAY on that aren't (LOCKED IN). Empty list if nothing else needs to change.`;
+
+const FLAG = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['date', 'workout_title', 'issue', 'suggestion', 'move_to_date', 'move_to_time'],
+  properties: {
+    date: { type: 'string', format: 'date' },
+    workout_title: { type: 'string' },
+    issue: { type: 'string' },
+    suggestion: { type: 'string' },
+    move_to_date: { anyOf: [{ type: 'string', format: 'date' }, { type: 'null' }] },
+    move_to_time: { anyOf: [{ type: 'string', format: 'time' }, { type: 'null' }], description: '24h HH:MM' },
+  },
+};
+
+const REVIEW_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['reply', 'flags', 'days'],
+  properties: {
+    reply: { type: 'string' },
+    flags: { type: 'array', items: FLAG },
+    days: SCHEMA.properties.days,
+  },
+};
+
 function describeDay(date, list) {
   const items = (list || []).map((w) => {
-    const status = w.status === 'planned' ? '' : ` [${w.status.toUpperCase()}${w.feel ? `, felt ${w.feel}/5` : ''}]`;
+    const status = w.status === 'planned'
+      ? (w.pinned ? ' [PINNED]' : '')
+      : ` [${w.status.toUpperCase()}${w.feel ? `, felt ${w.feel}/5` : ''}]`;
     const stats = summary(w);
     return `${w.type}: ${w.title}${stats ? ` (${stats})` : ''}${w.intensity !== 'easy' ? `, ${w.intensity}` : ''}${status}${w.note ? ` — "${w.note}"` : ''}`;
   });
-  return `${D.DOW[D.dow(date)]} ${date}: ${items.length ? items.join('; ') : 'nothing'}`;
+  const locked = db.weeks[D.mondayOf(date)]?.commits?.[date] ? ' (LOCKED IN)' : '';
+  return `${D.DOW[D.dow(date)]} ${date}${locked}: ${items.length ? items.join('; ') : 'nothing'}`;
 }
 
 function describeCalendar(weekStart, calendar, officeFn) {
@@ -194,7 +230,9 @@ function partialReply(json) {
 
 // Sends one message to the coach. Returns { reply, days, logEntries, cost }.
 // onReply(text) is called with the reply so far as it streams in.
-export async function ask({ weekStart, text, calendar, isOffice, warnings, onReply = () => {} }) {
+// mode 'review' returns { reply, flags, days } as a proposal instead of a plan to apply.
+export async function ask({ weekStart, text, calendar, isOffice, warnings, onReply = () => {}, mode = 'plan' }) {
+  const review = mode === 'review';
   if (!db.settings.anthropicKey.trim()) throw new Error('Add your Anthropic API key in Settings to use the coach.');
   if (!canAfford()) {
     throw new BudgetError(`Weekly AI budget reached (${cents(spentThisWeek())} of ${cents(db.settings.weeklyBudget)}). The coach is back Monday — you can still edit the plan by hand.`);
@@ -213,8 +251,8 @@ export async function ask({ weekStart, text, calendar, isOffice, warnings, onRep
     const stream = c.messages.stream({
       model: MODEL,
       max_tokens: MAX_TOKENS,
-      system: SYSTEM,
-      output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
+      system: review ? SYSTEM + REVIEW_RULES : SYSTEM,
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: review ? REVIEW_SCHEMA : SCHEMA } },
       messages,
     });
     let soFar = '';
@@ -249,6 +287,7 @@ export async function ask({ weekStart, text, calendar, isOffice, warnings, onRep
   } catch {
     throw new Error('The coach sent back something unreadable. Try again.');
   }
+  if (review) return { reply: out.reply, review: { flags: out.flags || [], days: out.days || [] }, days: null, officeOverrides: [], logEntries: [], cost };
   return {
     reply: out.reply,
     days: out.plan_changed ? out.days : null,

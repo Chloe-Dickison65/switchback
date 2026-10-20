@@ -346,3 +346,56 @@ body.dragging { cursor: grabbing; }
 .ci-legend span { display: flex; align-items: center; gap: 4px; }
 .ci-legend i { width: 9px; height: 9px; border-radius: 50%; }
 .ci-tally { margin: 10px 0 0; font-weight: 600; }
+
+/* ---------- pins, lock in the week, multi-item check-in ---------- */
+.pin { display: inline-flex; margin-left: 5px; color: var(--muted); font-size: 13px; vertical-align: middle; }
+.pin-note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.banner span small { display: block; font-size: 12px; font-weight: 500; color: var(--muted); }
+.lock-week { flex-direction: column; gap: 2px; margin-top: 8px; padding: 12px; }
+.lock-week small { font-size: 12px; font-weight: 500; opacity: .85; }
+.btn.small { padding: 7px 10px; font-size: 13px; border-radius: 10px; }
+.icon-sm.danger { color: var(--danger); }
+.icon-sm:disabled { opacity: .3; }
+.ci-items { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; }
+.ci-item { display: grid; grid-template-columns: 36px 1fr auto; grid-template-areas: "icon label remove" "icon controls controls"; gap: 4px 10px; align-items: center; padding: 10px; border-radius: 14px; background: color-mix(in srgb, var(--c) 10%, #fff); border: 1px solid color-mix(in srgb, var(--c) 25%, #fff); }
+.ci-item-icon { grid-area: icon; width: 36px; height: 36px; border-radius: 10px; background: var(--c); color: #fff; display: grid; place-items: center; font-size: 19px; align-self: start; }
+.ci-item-label { grid-area: label; font-weight: 700; }
+.ci-remove { grid-area: remove; color: var(--muted); font-size: 15px; padding: 2px; }
+.ci-item-controls { grid-area: controls; display: flex; align-items: center; gap: 6px; }
+.ci-item.s-done .ci-item-label { color: var(--accent-dark); }
+.ci-item.s-skipped { opacity: .6; }
+.ci-state { font-size: 13px; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.ci-state.done { color: var(--accent-dark); }
+.ci-add-btn { margin-top: 4px; }
+.ci-add-more { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
+.ci-actions { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.ci-feel { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 4px; text-align: center; }
+.ci-edit-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.ci-edit-row span { flex: 1; display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.ci-edit-row span .ti { color: var(--accent); }
+.ci-edit .link { display: block; margin: 8px 0; }
+.ci-cell { position: relative; }
+.ci-cell i { position: absolute; right: 3px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: #fff; }
+.lockin-card li b { margin-right: 4px; }
+
+/* ---------- coach review proposal ---------- */
+.proposal { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.proposal h4 { margin: 8px 0 6px; font: 600 14px/1.2 var(--display); }
+.proposal.done { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--accent-dark); font-size: 13.5px; }
+.prop-ok { display: flex; align-items: center; gap: 6px; color: var(--accent-dark); font-weight: 600; font-size: 13.5px; margin: 4px 0; }
+.prop-flag { background: var(--warn-bg); border-radius: 12px; padding: 10px; margin-bottom: 8px; }
+.prop-issue { margin: 0 0 4px; font-size: 13.5px; color: var(--warn-text); }
+.prop-issue .ti { margin-right: 2px; }
+.prop-suggest { margin: 0 0 8px; font-size: 13.5px; }
+.seg { display: flex; background: #fff; border-radius: 10px; padding: 3px; gap: 3px; }
+.seg button { flex: 1; padding: 7px 8px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.seg button.on { background: var(--accent); color: #fff; }
+.prop-day { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--text); font-size: 13.5px; margin: 0; }
+.prop-day input { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 1px; flex: none; }
+.prop-day b { min-width: 30px; }
+.prop-parts { display: flex; flex-direction: column; gap: 2px; font-weight: 500; }
+.prop-parts .minus { color: var(--danger); text-decoration: line-through; }
+.prop-parts .plus { color: var(--accent-dark); }
+.prop-parts .ti { font-size: 13px; }
+.proposal .row .btn { flex: 1; }
+.msg.assistant:has(.proposal) { max-width: 100%; }

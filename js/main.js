@@ -22,8 +22,10 @@ const ui = {
   calState: '',  // '' | 'loading' | 'error'
   syncing: false,
   checkinDate: null, // Today tab: which day you're checking in for (null = today)
-  ciPick: null,      // the one thing you've tapped but not committed to yet
-  ciCustom: false,
+  ciSel: new Set(),  // options tapped in the picker but not committed to yet
+  ciCustom: false,   // showing the "add your own" form
+  ciAdding: false,   // showing the picker to add more to a day that has items
+  ciEdit: false,     // editing your list of options
   ciMonth: null,     // 'YYYY-MM' shown in the month view
 };
 
@@ -115,17 +117,23 @@ async function connectCalendar() {
 
 // ---------- coach ----------
 
+// Apply the coach's plan. Your own changes always win: locked-in days and
+// pinned workouts (ones you moved, retimed, edited or added) are never touched.
 function applyPlan(ws, days) {
   const week = getWeek(ws);
   const today = D.todayIso();
   const valid = new Set(D.weekDates(ws));
+  // A pinned workout lives where you put it, so the coach can't add a copy elsewhere.
+  const pinnedTitles = new Set(Object.values(week.days).flat()
+    .filter((w) => w.pinned && w.status === 'planned').map((w) => w.title.toLowerCase()));
   for (const day of days) {
     if (!valid.has(day.date) || day.date < today) continue; // the past is the past
+    if (isCommitted(day.date)) continue;
     const old = week.days[day.date] || [];
-    const kept = old.filter((w) => w.status !== 'planned');
-    const pool = old.filter((w) => w.status === 'planned');
+    const kept = old.filter((w) => w.status !== 'planned' || w.pinned);
+    const pool = old.filter((w) => w.status === 'planned' && !w.pinned);
     const fresh = day.workouts
-      .filter((nw) => !kept.some((k) => k.type === nw.type))
+      .filter((nw) => !kept.some((k) => k.type === nw.type) && !pinnedTitles.has(nw.title.toLowerCase()))
       .map((nw) => {
         const i = pool.findIndex((p) => p.type === nw.type); // reuse ids so calendar events update in place
         const id = i >= 0 ? pool.splice(i, 1)[0].id : undefined;
@@ -169,7 +177,7 @@ function showLiveReply(text) {
   scrollChat();
 }
 
-async function sendToCoach(text) {
+async function sendToCoach(text, { mode = 'plan' } = {}) {
   text = text.trim();
   if (!text || ui.busy) return;
   const ws = ui.weekStart;
@@ -183,11 +191,14 @@ async function sendToCoach(text) {
     if (Cal.isConnected() && !calendarFor(ws)) await refreshCalendar(ws);
     const res = await Coach.ask({
       weekStart: ws, text, calendar: calendarFor(ws), isOffice: officeFn(ws), warnings: currentWarnings(ws),
-      onReply: showLiveReply,
+      onReply: showLiveReply, mode,
     });
     const chat = (db.chats[ws] ||= []);
     chat.push({ role: 'user', text, ts: Date.now() });
-    chat.push({ role: 'assistant', text: res.reply, ts: Date.now(), cost: res.cost, planChanged: !!res.days, logged: res.logEntries.length });
+    chat.push({
+      role: 'assistant', text: res.reply, ts: Date.now(), cost: res.cost, planChanged: !!res.days, logged: res.logEntries.length,
+      ...(res.review ? { proposal: newProposal(ws, res.review) } : {}),
+    });
     res.logEntries.forEach(addLogEntry);
     for (const { date, office } of res.officeOverrides) setOfficeDay(date, office);
     if (res.days) {
@@ -208,6 +219,96 @@ async function sendToCoach(text) {
     scrollChat();
   }
 }
+
+// ---------- coach review of your changes ----------
+
+// What a proposed day would change: planned workouts the coach can touch, before vs after.
+function dayDiff(ws, day) {
+  const current = (getWeek(ws).days[day.date] || []).filter((w) => w.status === 'planned' && !w.pinned);
+  const pinned = new Set((getWeek(ws).days[day.date] || []).filter((w) => w.pinned).map((w) => w.title.toLowerCase()));
+  const proposed = day.workouts.filter((w) => !pinned.has(w.title.toLowerCase()));
+  const key = (w) => `${w.type}|${w.title.toLowerCase()}`;
+  const removed = current.filter((w) => !proposed.some((p) => key(p) === key(w)));
+  const added = proposed.filter((p) => !current.some((w) => key(p) === key(w)));
+  return { removed, added };
+}
+
+function newProposal(ws, { flags, days }) {
+  const today = D.todayIso();
+  const useful = days.filter((d) => d.date >= today && !isCommitted(d.date) && D.mondayOf(d.date) === ws)
+    .filter((d) => { const { removed, added } = dayDiff(ws, d); return removed.length || added.length; });
+  const proposal = { ws, flags, days: useful, useFlag: flags.map(() => false), takeDay: useful.map(() => true), status: 'pending' };
+  if (!flags.length && !useful.length) {
+    proposal.status = 'clean';
+    getWeek(ws).manualChange = '';
+  }
+  return proposal;
+}
+
+function proposalCard(m, i) {
+  const p = m.proposal;
+  if (p.status === 'clean') return `<div class="proposal done">${ic('circle-check')} Your changes look good. Nothing to adjust.</div>`;
+  if (p.status !== 'pending') {
+    return `<div class="proposal done">${ic(p.status === 'applied' ? 'circle-check' : 'x')} ${p.status === 'applied' ? `Applied ${p.appliedCount} ${p.appliedCount === 1 ? 'change' : 'changes'}` : 'Dismissed. Nothing changed.'}</div>`;
+  }
+  const dayName = (d) => D.DOW_LONG[D.dow(d)];
+  const flags = p.flags.map((f, j) => `
+    <div class="prop-flag">
+      <p class="prop-issue">${ic('alert-triangle')} <b>${esc(f.workout_title)}</b> on ${dayName(f.date)}: ${esc(f.issue)}</p>
+      <p class="prop-suggest">${esc(f.suggestion)}</p>
+      <div class="seg">
+        <button class="${p.useFlag[j] ? '' : 'on'}" data-act="prop-flag" data-msg="${i}" data-i="${j}" data-use="0">Keep mine</button>
+        ${f.move_to_date ? `<button class="${p.useFlag[j] ? 'on' : ''}" data-act="prop-flag" data-msg="${i}" data-i="${j}" data-use="1">Move to ${D.DOW[D.dow(f.move_to_date)]}${f.move_to_time ? ` ${D.prettyTime(f.move_to_time.slice(0, 5))}` : ''}</button>` : ''}
+      </div>
+    </div>`).join('');
+  const days = p.days.map((d, j) => {
+    const { removed, added } = dayDiff(p.ws, d);
+    const parts = [
+      ...removed.map((w) => `<span class="minus">${ic('minus')} ${esc(w.title)}</span>`),
+      ...added.map((w) => `<span class="plus">${ic('plus')} ${esc(w.title)}${w.distance_mi ? ` · ${w.distance_mi} mi` : w.minutes ? ` · ${w.minutes} min` : ''}</span>`),
+    ];
+    return `
+      <label class="prop-day">
+        <input type="checkbox" data-act-change="prop-day" data-msg="${i}" data-i="${j}" ${p.takeDay[j] ? 'checked' : ''}>
+        <b>${D.DOW[D.dow(d.date)]}</b><span class="prop-parts">${parts.join('')}</span>
+      </label>`;
+  }).join('');
+  const count = p.useFlag.filter(Boolean).length + p.takeDay.filter(Boolean).length;
+  return `
+    <div class="proposal">
+      ${flags ? `<h4>About your changes</h4>${flags}` : `<p class="prop-ok">${ic('circle-check')} Your changes work with your recovery.</p>`}
+      ${days ? `<h4>Suggested adjustments</h4>${days}` : ''}
+      <div class="row">
+        <button class="btn primary" data-act="prop-apply" data-msg="${i}" ${count ? '' : 'disabled'}>${ic('check')} Apply ${count || ''}</button>
+        <button class="btn" data-act="prop-dismiss" data-msg="${i}">Dismiss</button>
+      </div>
+    </div>`;
+}
+
+function applyProposal(p) {
+  const week = getWeek(p.ws);
+  let applied = 0;
+  // Accepted suggestions for your own changes: move that workout (it stays pinned; you approved it).
+  p.flags.forEach((f, j) => {
+    if (!p.useFlag[j] || !f.move_to_date || D.mondayOf(f.move_to_date) !== p.ws) return;
+    const list = week.days[f.date] || [];
+    const w = list.find((x) => x.status === 'planned' && x.title.toLowerCase() === f.workout_title.toLowerCase());
+    if (!w) return;
+    list.splice(list.indexOf(w), 1);
+    (week.days[f.move_to_date] ||= []).push(w);
+    if (/^\d{2}:\d{2}/.test(f.move_to_time || '')) w.startTime = f.move_to_time.slice(0, 5);
+    applied++;
+  });
+  const days = p.days.filter((_, j) => p.takeDay[j]);
+  applyPlan(p.ws, days);
+  applied += days.length;
+  week.manualChange = '';
+  week.synced = false;
+  save();
+  queueSync(p.ws);
+  return applied;
+}
+
 
 function startPlanning() {
   const ws = ui.weekStart;
@@ -279,9 +380,12 @@ function hero(ws) {
       ${P.trailSvg(week, { pop })}
       <div class="hero-chips">
         ${planned ? `<span class="mini-chip">${ic('run')} ${ran} of ${planned} mi</span>` : ''}
-        ${lockedCount(ws).total ? `<span class="mini-chip">${ic('lock')} ${lockedCount(ws).locked} of ${lockedCount(ws).total} ${lockedCount(ws).total === 1 ? 'day' : 'days'} locked in</span>` : ''}
+        ${lockedCount(ws).total && lockedCount(ws).locked === lockedCount(ws).total ? `<span class="mini-chip sun">${ic('lock')} Week locked in</span>` : ''}
         ${streak >= 2 ? `<span class="mini-chip sun">${ic('flag')} ${streak}-week streak</span>` : ''}
       </div>
+      ${lockedCount(ws).total && lockedCount(ws).locked < lockedCount(ws).total
+        ? `<button class="btn primary wide lock-week" data-act="lock-week">${ic('lock')} Lock in the week<small>${lockedCount(ws).locked} of ${lockedCount(ws).total} days locked in</small></button>`
+        : ''}
     </section>`;
 }
 
@@ -440,7 +544,7 @@ function workoutButton(w, date) {
   return `
     <button class="wk s-${w.status}" style="--c:${t.color}" data-act="open" data-date="${date}" data-id="${w.id}">
       <span class="wk-icon">${ic(t.icon)}</span>
-      <span class="wk-main"><b>${esc(w.title || t.label)}</b>${meta ? `<small>${esc(meta)}</small>` : ''}</span>
+      <span class="wk-main"><b>${esc(w.title || t.label)}${w.pinned && w.status === 'planned' ? `<span class="pin" title="You placed this; the coach won't move it">${ic('pin')}</span>` : ''}</b>${meta ? `<small>${esc(meta)}</small>` : ''}</span>
       ${f ? `<span class="wx">${ic(W.icon(f.code))} ${f.temp}°${f.rain >= 20 ? `<small>${f.rain}%</small>` : ''}</span>` : ''}
       <span class="wk-check">${w.status === 'done' ? (w.feel ? FEELS[w.feel - 1] : ic('check')) : w.status === 'skipped' ? '–' : ''}</span>
     </button>`;
@@ -458,7 +562,7 @@ function weekView() {
   const cta = !planned
     ? `<button class="cta" data-act="plan">${ic('sparkles')} ${isSunday && ws > today ? 'Plan next week' : 'Plan this week'}</button>`
     : week.manualChange
-      ? `<div class="banner"><span>You changed the plan.</span><button class="cta small" data-act="rebalance">${ic('sparkles')} Rebalance the rest</button></div>`
+      ? `<div class="banner"><span>You changed the plan.<small>The coach will check it and suggest tweaks for you to approve.</small></span><button class="cta small" data-act="rebalance">${ic('sparkles')} Review my changes</button></div>`
       : '';
 
   const general = warnings.filter((w) => !w.date);
@@ -506,9 +610,10 @@ function coachView() {
     ? ['Plan my week']
     : ["I'm sore today", 'Something came up', 'Swap two days', 'Rebalance the rest of the week'];
 
-  const bubbles = chat.map((m) => `
+  const bubbles = chat.map((m, i) => `
     <div class="msg ${m.role}">
       <p>${esc(m.text)}</p>
+      ${m.proposal ? proposalCard(m, i) : ''}
       ${m.role === 'assistant' ? `
         <div class="msg-meta">
           ${m.planChanged ? '<button class="link" data-act="nav" data-view="week">Plan updated ✓ View week →</button>' : ''}
@@ -670,6 +775,7 @@ function sheet() {
         <button class="chip ${d === s.date ? 'on' : ''}" data-act="move" data-to="${d}">${D.DOW[D.dow(d)]}</button>`).join('')}
       </div>
       <details ${s.editing ? 'open' : ''}><summary>Edit details</summary>${workoutForm(w, s.date, false)}</details>
+      ${w.pinned && w.status === 'planned' ? `<p class="hint pin-note">${ic('pin')} Pinned: the coach won't move or change this. <button class="link" data-act="unpin">Let the coach adjust it</button></p>` : ''}
       <button class="btn danger wide" data-act="delete">Delete</button>`;
   }
   return `<div class="backdrop" data-act="close"></div><div class="sheet" role="dialog">${body}</div>`;
@@ -752,6 +858,7 @@ function moveWorkout(date, id, to) {
   const ws = D.mondayOf(date);
   const from = dayWorkouts(ws, date);
   const w = from.splice(from.findIndex((x) => x.id === id), 1)[0];
+  w.pinned = true;
   dayWorkouts(D.mondayOf(to), to).push(w);
   changed(ws, w.status === 'planned' ? `Moved ${w.title} from ${D.DOW[D.dow(date)]} to ${D.DOW[D.dow(to)]}.` : '');
 }
@@ -762,64 +869,146 @@ function moveWorkout(date, id, to) {
 const COMMIT_LINES = ['A promise to yourself.', 'Future you says thanks.', 'Small things, every day.', 'That\'s the spirit.'];
 const DONE_LINES = ['You showed up for yourself.', 'That counts. Every bit of it.', 'Nice. Keep the streak going.', 'One more good day on the trail.'];
 
-function commitCheckin(choice) {
-  if (!choice) return;
-  const date = ui.checkinDate || D.todayIso();
-  T.setCheckin(date, { ...choice, status: 'committed', committedAt: Date.now() });
-  ui.ciPick = null;
+const ciDate = () => ui.checkinDate || D.todayIso();
+
+function resetPicker() {
+  ui.ciSel = new Set();
   ui.ciCustom = false;
-  render();
-  celebrate({
-    title: date === D.todayIso() ? 'You\'re committed!' : 'Committed',
-    lines: `<li>${ic(choice.icon)} ${esc(choice.label)}</li>`,
-    sub: pick(COMMIT_LINES),
-  });
+  ui.ciAdding = false;
+  ui.ciEdit = false;
 }
 
-function finishCheckin() {
-  const date = ui.checkinDate || D.todayIso();
-  const c = T.checkinFor(date);
+// Commit to everything you've selected in the picker.
+function commitSelected() {
+  const date = ciDate();
+  const chosen = [...(ui.ciSel || [])].map((key) => {
+    const [kind, id] = [key.slice(0, 1), key.slice(2)];
+    if (kind === 'w') {
+      const w = T.workoutsOn(date).find((x) => x.id === id);
+      return w && { label: w.title, icon: TYPES[w.type].icon, category: 'move', workoutId: w.id };
+    }
+    const o = T.allOptions().find((x) => x.id === id);
+    return o && { label: o.label, icon: o.icon, category: o.category };
+  }).filter(Boolean);
+  if (!chosen.length) return;
+  const first = !T.dayCheckin(date).items.length;
+  T.addItems(date, chosen);
+  resetPicker();
+  render();
+  if (first) {
+    celebrate({
+      title: date === D.todayIso() ? 'You\'re committed!' : 'Committed',
+      lines: chosen.map((c) => `<li>${ic(c.icon)} ${esc(c.label)}</li>`).join(''),
+      sub: pick(COMMIT_LINES),
+    });
+  } else {
+    toast(`Added ${chosen.length === 1 ? esc(chosen[0].label) : `${chosen.length} things`}`);
+  }
+}
+
+function finishItem(id) {
+  const date = ciDate();
+  const it = T.itemFor(date, id);
+  if (!it) return;
+  const firstDone = !T.isDone(date);
   // Committing to a workout and doing it marks the workout done too.
-  const w = c?.workoutId && findWorkout(date, c.workoutId);
+  const w = it.workoutId && findWorkout(date, it.workoutId);
   if (w && w.status !== 'done') {
     w.status = 'done';
     changed(D.mondayOf(date));
   }
-  T.setCheckin(date, { status: 'done', doneAt: Date.now() });
+  T.setItem(date, id, { status: 'done', doneAt: Date.now() });
   render();
   const n = T.streak();
-  celebrate({
-    title: 'You did it!',
-    lines: `<li>${ic(c.icon)} ${esc(c.label)}</li>`,
-    sub: pick(DONE_LINES),
-    badge: n ? `${T.streakText(n)} showing up for yourself` : '',
-    badgeIcon: 'flame',
-  });
+  if (firstDone) {
+    celebrate({
+      title: 'You did it!',
+      lines: `<li>${ic(it.icon)} ${esc(it.label)}</li>`,
+      sub: pick(DONE_LINES),
+      badge: n ? `${T.streakText(n)} showing up for yourself` : '',
+      badgeIcon: 'flame',
+    });
+  } else {
+    const count = T.dayCheckin(date).items.filter((x) => x.status === 'done').length;
+    toast(`Nice. ${count} things for you today.`);
+  }
 }
 
 const actions = {
-  'ci-pick': (el) => {
-    const date = ui.checkinDate || D.todayIso();
-    if (el.dataset.workout) {
-      const w = T.workoutsOn(date).find((x) => x.id === el.dataset.workout);
-      ui.ciPick = { label: w.title, icon: TYPES[w.type].icon, category: 'move', workoutId: w.id };
-    } else {
-      ui.ciPick = { ...T.PRESETS[Number(el.dataset.preset)] };
-    }
-    ui.ciCustom = false;
+  'prop-flag': (el) => {
+    const p = db.chats[ui.weekStart][Number(el.dataset.msg)].proposal;
+    p.useFlag[Number(el.dataset.i)] = el.dataset.use === '1';
+    save();
     render();
   },
-  'ci-custom': () => { ui.ciCustom = !ui.ciCustom; ui.ciPick = null; render(); },
-  'ci-commit': () => commitCheckin(ui.ciPick),
-  'ci-done': finishCheckin,
-  'ci-skip': () => { T.setCheckin(ui.checkinDate || D.todayIso(), { status: 'skipped' }); render(); },
-  'ci-change': () => { T.clearCheckin(ui.checkinDate || D.todayIso()); render(); },
-  'ci-undo': () => { T.setCheckin(ui.checkinDate || D.todayIso(), { status: 'committed' }); render(); },
-  'ci-mood': (el) => { T.setCheckin(ui.checkinDate || D.todayIso(), { mood: Number(el.dataset.mood) }); render(); },
+  'prop-apply': (el) => {
+    const p = db.chats[ui.weekStart][Number(el.dataset.msg)].proposal;
+    p.appliedCount = applyProposal(p);
+    p.status = 'applied';
+    save();
+    toast('Plan updated');
+  },
+  'prop-dismiss': (el) => {
+    const p = db.chats[ui.weekStart][Number(el.dataset.msg)].proposal;
+    p.status = 'dismissed';
+    getWeek(p.ws).manualChange = '';
+    save();
+    render();
+  },
+  'lock-week': () => {
+    const ws = ui.weekStart;
+    const week = getWeek(ws);
+    const days = D.weekDates(ws).filter((d) => d >= D.todayIso()
+      && (week.days[d] || []).some((w) => w.status === 'planned' && w.type !== 'rest'));
+    week.commits = { ...week.commits };
+    for (const d of days) week.commits[d] = commitKey(week.days[d]);
+    save();
+    render();
+    celebrate({
+      title: 'Your week is locked in!',
+      lines: days.map((d) => {
+        const list = week.days[d].filter((w) => w.status === 'planned' && w.type !== 'rest' && w.type !== 'stretch');
+        const first = list[0] || week.days[d].find((w) => w.status === 'planned');
+        return `<li><b>${D.DOW[D.dow(d)]}</b> ${ic(TYPES[first.type].icon)} ${esc(first.title)}${list.length > 1 ? ` +${list.length - 1}` : ''}</li>`;
+      }).join(''),
+      sub: pick(LOCK_LINES),
+      badge: `${days.length} ${days.length === 1 ? 'day' : 'days'} locked in`,
+    });
+  },
+  unpin: () => {
+    const w = findWorkout(ui.sheet.date, ui.sheet.id);
+    w.pinned = false;
+    save();
+    toast('The coach can adjust this one now');
+  },
+  'ci-pick': (el) => {
+    ui.ciSel = ui.ciSel || new Set();
+    const { key } = el.dataset;
+    ui.ciSel.has(key) ? ui.ciSel.delete(key) : ui.ciSel.add(key);
+    render();
+  },
+  'ci-custom': () => { ui.ciCustom = !ui.ciCustom; render(); },
+  'ci-commit': commitSelected,
+  'ci-add': () => { resetPicker(); ui.ciAdding = true; render(); },
+  'ci-edit': () => { ui.ciEdit = !ui.ciEdit; render(); },
+  'ci-opt-up': (el) => { T.moveOption(el.dataset.id, -1); render(); },
+  'ci-opt-down': (el) => { T.moveOption(el.dataset.id, 1); render(); },
+  'ci-opt-remove': (el) => { T.removeOption(el.dataset.id); render(); },
+  'ci-opt-restore': () => { T.restoreHidden(); render(); },
+  'ci-done': (el) => finishItem(el.dataset.id),
+  'ci-skip': (el) => { T.setItem(ciDate(), el.dataset.id, { status: 'skipped' }); render(); },
+  'ci-undo': (el) => {
+    const it = T.itemFor(ciDate(), el.dataset.id);
+    const w = it?.workoutId && findWorkout(ciDate(), it.workoutId);
+    if (w && w.status === 'done') { w.status = 'planned'; changed(D.mondayOf(ciDate())); }
+    T.setItem(ciDate(), el.dataset.id, { status: 'committed' });
+    render();
+  },
+  'ci-remove': (el) => { T.removeItem(ciDate(), el.dataset.id); render(); },
+  'ci-mood': (el) => { T.setDay(ciDate(), { mood: Number(el.dataset.mood) }); render(); },
   'ci-date': (el) => {
     ui.checkinDate = el.dataset.date && el.dataset.date !== D.todayIso() ? el.dataset.date : null;
-    ui.ciPick = null;
-    ui.ciCustom = false;
+    resetPicker();
     render();
     scrollTo(0, 0);
   },
@@ -837,7 +1026,7 @@ const actions = {
     if (!calendarFor(ui.weekStart)) refreshCalendar(ui.weekStart);
   },
   plan: startPlanning,
-  rebalance: () => sendToCoach(`I changed the plan myself: ${getWeek(ui.weekStart).manualChange} Keep my changes and rebalance the rest of the week around them.`),
+  rebalance: () => sendToCoach(`Please review the changes I made: ${getWeek(ui.weekStart).manualChange}`, { mode: 'review' }),
   quick: (el) => {
     const text = el.dataset.text;
     if (text === 'Plan my week') return sendToCoach(`Plan my week of ${D.weekLabel(ui.weekStart)}.`);
@@ -988,16 +1177,19 @@ document.addEventListener('submit', (e) => {
   if (form.dataset.form === 'weather') return setWeatherPlace(form.place.value);
   if (form.dataset.form === 'ci-custom') {
     const label = form.label.value.trim();
-    if (!label) return toast('Name your one thing first.');
-    const category = new FormData(form).get('category') || 'create';
-    return commitCheckin({ label, icon: T.CATEGORY_ICON[category], category });
+    if (!label) return toast('Give it a name first.');
+    const option = T.addOption(label, new FormData(form).get('category') || 'create');
+    ui.ciCustom = false;
+    ui.ciSel = new Set([...(ui.ciSel || []), `o:${option.id}`]);
+    render();
+    return toast(`${label} added to your options`);
   }
   const data = readForm(form);
   const { date } = ui.sheet;
   const ws = D.mondayOf(date);
   if (form.dataset.form === 'add') {
     const { done, ...fields } = data;
-    dayWorkouts(ws, date).push(workout({ ...fields, status: done ? 'done' : 'planned', source: done ? 'logged' : 'plan' }));
+    dayWorkouts(ws, date).push(workout({ ...fields, pinned: true, status: done ? 'done' : 'planned', source: done ? 'logged' : 'plan' }));
     ui.sheet = null;
     changed(ws, done ? '' : `Added ${fields.title} on ${D.DOW[D.dow(date)]}.`);
     if (done) ui.popDate = date;
@@ -1005,7 +1197,7 @@ document.addEventListener('submit', (e) => {
   } else {
     const w = findWorkout(date, ui.sheet.id);
     const { done, ...fields } = data;
-    Object.assign(w, fields);
+    Object.assign(w, fields, { pinned: true });
     ui.sheet = { ...ui.sheet, editing: false };
     changed(ws, w.status === 'planned' ? `Edited ${w.title} on ${D.DOW[D.dow(date)]}.` : '');
     toast('Saved');
@@ -1020,7 +1212,7 @@ document.addEventListener('input', (e) => {
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }
   if (el.dataset.ciNote !== undefined) {
-    T.setCheckin(ui.checkinDate || D.todayIso(), { note: el.value });
+    T.setDay(ciDate(), { note: el.value });
   }
   if (el.dataset.wfield) {
     const w = findWorkout(ui.sheet.date, ui.sheet.id);
@@ -1036,6 +1228,12 @@ document.addEventListener('change', async (e) => {
     db.settings[key] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) || 0 : el.value;
     save();
     if (key !== 'profile' && key !== 'anthropicKey') render();
+  }
+  if (el.dataset.actChange === 'prop-day') {
+    const p = db.chats[ui.weekStart][Number(el.dataset.msg)].proposal;
+    p.takeDay[Number(el.dataset.i)] = el.checked;
+    save();
+    render();
   }
   if (el.dataset.actChange === 'import' && el.files[0]) {
     try {
@@ -1072,6 +1270,7 @@ enableDrag((from, id, to) => {
 }, (date, id, time) => {
   const w = findWorkout(date, id);
   w.startTime = time;
+  w.pinned = true;
   const hour = Number(time.slice(0, 2));
   w.timeOfDay = hour < 11 ? 'morning' : hour < 15 ? 'midday' : 'evening';
   changed(D.mondayOf(date));
