@@ -126,7 +126,7 @@ function describeCalendar(weekStart, calendar, officeFn) {
     if (officeFn(date)) bits.push('OFFICE DAY (no workouts)');
     for (const e of events) {
       if (e.office) continue;
-      const title = db.settings.shareEventTitles ? e.title : 'busy';
+      const title = e.title; // always "Busy": the app only gets free/busy times
       bits.push(e.allDay ? `all day: ${title}` : `${e.start}–${e.end} ${title}`);
     }
     return `${D.DOW[D.dow(date)]} ${date}: ${bits.length ? bits.join('; ') : 'free'}`;

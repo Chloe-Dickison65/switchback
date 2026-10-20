@@ -1,4 +1,4 @@
-// Google Calendar: read busy time from your calendars, write workouts to a
+// Google Calendar: read only when you're busy, write workouts to a
 // separate "Workouts" calendar so Google sends the reminders.
 
 import * as D from './dates.js';
@@ -6,7 +6,8 @@ import { db, save } from './store.js';
 import { TYPES, estimateMinutes } from './rules.js';
 
 const SCOPES = [
-  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly', // which calendars you have (names only)
+  'https://www.googleapis.com/auth/calendar.freebusy', // when you're busy, never event details
   'https://www.googleapis.com/auth/calendar.app.created', // only calendars this app creates
 ].join(' ');
 const API = 'https://www.googleapis.com/calendar/v3';
@@ -120,44 +121,43 @@ function weekRange(weekStart) {
   return { timeMin: start.toISOString(), timeMax: end.toISOString() };
 }
 
-// Returns { 'YYYY-MM-DD': [{ title, start, end, allDay, office }] } for the week.
+// Returns { 'YYYY-MM-DD': [{ title: 'Busy', start, end, allDay }] } for the week.
+// Only free/busy times are requested: Google never sends event names or details.
 export async function fetchWeek(weekStart) {
-  const calendars = (await listAll('/users/me/calendarList', { minAccessRole: 'reader' }))
+  const calendars = (await listAll('/users/me/calendarList', { minAccessRole: 'freeBusyReader' }))
     .filter((c) => c.selected !== false && c.id !== db.settings.workoutsCalendarId);
   const { timeMin, timeMax } = weekRange(weekStart);
   const dates = D.weekDates(weekStart);
   const byDay = Object.fromEntries(dates.map((d) => [d, []]));
+  if (!calendars.length) return byDay;
 
-  const results = await Promise.all(calendars.map((cal) =>
-    listAll(`/calendars/${enc(cal.id)}/events`, { timeMin, timeMax, singleEvents: 'true', orderBy: 'startTime', maxResults: 250 })
-      .catch(() => [])));
+  const fb = await api('/freeBusy', { method: 'POST', body: { timeMin, timeMax, timeZone: TZ, items: calendars.map((c) => ({ id: c.id })) } });
+  const blocks = Object.values(fb.calendars || {})
+    .flatMap((c) => c.busy || [])
+    .map((b) => [new Date(b.start).getTime(), new Date(b.end).getTime()])
+    .sort((a, b) => a[0] - b[0]);
 
-  results.flat().forEach((e) => {
-    if (e.status === 'cancelled' || e.eventType === 'birthday') return;
-    if (e.attendees?.some((a) => a.self && a.responseStatus === 'declined')) return;
-    const office = e.eventType === 'workingLocation'
-      ? e.workingLocationProperties?.type === 'officeLocation'
-      : /\b(in[- ]?office|wfo|office day)\b/i.test(e.summary || '');
-    if (e.eventType === 'workingLocation' && !office) return;
-
-    if (e.start.date) {
-      // All-day: may span several days (end date is exclusive).
-      for (let d = e.start.date; d < e.end.date; d = D.addDays(d, 1)) {
-        if (byDay[d]) byDay[d].push({ title: e.summary || 'Busy', allDay: true, office });
+  // Merge overlapping blocks across calendars, then split any that cross midnight.
+  const merged = [];
+  for (const b of blocks) {
+    const last = merged[merged.length - 1];
+    if (last && b[0] <= last[1]) last[1] = Math.max(last[1], b[1]);
+    else merged.push([...b]);
+  }
+  for (const [start, end] of merged) {
+    for (let s = start; s < end;) {
+      const day = D.iso(new Date(s));
+      const midnight = D.parse(D.addDays(day, 1)).getTime();
+      const e = Math.min(end, midnight);
+      if (byDay[day]) {
+        const allDay = e - s >= 23 * 3600_000;
+        byDay[day].push(allDay
+          ? { title: 'Busy all day', allDay: true }
+          : { title: 'Busy', allDay: false, start: D.hhmm(new Date(s)), end: e === midnight ? '23:59' : D.hhmm(new Date(e)) });
       }
-    } else {
-      const s = new Date(e.start.dateTime), en = new Date(e.end.dateTime);
-      const d = D.iso(s);
-      if (byDay[d]) {
-        byDay[d].push({
-          title: e.summary || 'Busy', allDay: false, office,
-          start: D.hhmm(s), end: D.iso(en) === d ? D.hhmm(en) : '23:59',
-          free: e.transparency === 'transparent',
-        });
-      }
+      s = e;
     }
-  });
-  for (const d of dates) byDay[d].sort((a, b) => (a.allDay ? '' : a.start).localeCompare(b.allDay ? '' : b.start));
+  }
   return byDay;
 }
 

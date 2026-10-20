@@ -9,7 +9,6 @@ const DEFAULTS = {
     weeklyBudget: 0.10,
     officeDays: [], // 0=Sun … 6=Sat
     profile: '', // filled in on the phone, so personal details never live in the code
-    shareEventTitles: true,
     reminderMinutes: 30,
     nightBeforeNudge: true,
     workoutsCalendarId: '',

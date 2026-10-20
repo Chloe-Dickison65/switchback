@@ -410,6 +410,7 @@ function settingsView() {
 
       <section class="card">
         <h3>${ic('calendar')} Google Calendar</h3>
+        <p class="hint">Switchback only sees when you're busy, never what your events are.</p>
         <label>OAuth client ID
           <input type="text" autocomplete="off" data-setting="googleClientId" value="${esc(s.googleClientId)}" placeholder="….apps.googleusercontent.com">
         </label>
@@ -419,7 +420,6 @@ function settingsView() {
             : `<button class="btn primary" data-act="cal-connect" ${s.googleClientId ? '' : 'disabled'}>Connect Google Calendar</button>`}
         </div>
         ${s.sundayReminderId ? '<p class="hint">✓ Sunday 6pm “Plan your week” reminder is on your Workouts calendar.</p>' : ''}
-        <label class="check"><input type="checkbox" data-setting="shareEventTitles" ${s.shareEventTitles ? 'checked' : ''}> Let the coach see event names (otherwise just “busy”)</label>
         <label>Remind me before workouts (minutes)
           <input type="number" min="0" step="5" data-setting="reminderMinutes" value="${s.reminderMinutes}">
         </label>
