@@ -7,6 +7,7 @@ const GEO = 'https://geocoding-api.open-meteo.com/v1/search';
 const FORECAST = 'https://api.open-meteo.com/v1/forecast';
 const MAX_AGE = 60 * 60 * 1000; // refresh hourly
 export const OUTDOOR = new Set(['run', 'hike', 'walk']);
+const cacheKey = (place) => `${place.lat},${place.lon},C`;
 
 export async function findPlace(query) {
   const url = `${GEO}?count=1&language=en&name=${encodeURIComponent(query.trim())}`;
@@ -26,11 +27,11 @@ export async function refresh({ force = false } = {}) {
   const place = db.settings.weatherPlace;
   if (!place) return false;
   const cache = db.weather;
-  if (!force && cache && cache.key === `${place.lat},${place.lon}` && Date.now() - cache.fetchedAt < MAX_AGE) return false;
+  if (!force && cache && cache.key === cacheKey(place) && Date.now() - cache.fetchedAt < MAX_AGE) return false;
   const params = new URLSearchParams({
     latitude: place.lat, longitude: place.lon, timezone: 'auto', forecast_days: 16,
     hourly: 'temperature_2m,precipitation_probability,weather_code,wind_speed_10m',
-    temperature_unit: 'fahrenheit', wind_speed_unit: 'mph',
+    temperature_unit: 'celsius', wind_speed_unit: 'kmh',
   });
   const res = await fetch(`${FORECAST}?${params}`);
   if (!res.ok) throw new Error('Could not load the forecast.');
@@ -39,7 +40,7 @@ export async function refresh({ force = false } = {}) {
   h.time.forEach((t, i) => {
     hours[t] = [Math.round(h.temperature_2m[i]), h.precipitation_probability[i] ?? 0, h.weather_code[i], Math.round(h.wind_speed_10m[i])];
   });
-  db.weather = { key: `${place.lat},${place.lon}`, fetchedAt: Date.now(), hours };
+  db.weather = { key: cacheKey(place), fetchedAt: Date.now(), hours };
   save();
   return true;
 }
@@ -63,10 +64,10 @@ export function icon(code) {
 }
 
 export function label(f) {
-  return `${f.temp}°${f.rain >= 20 ? ` · ${f.rain}% rain` : ''}${f.wind >= 15 ? ` · ${f.wind} mph wind` : ''}`;
+  return `${f.temp}°${f.rain >= 20 ? ` · ${f.rain}% rain` : ''}${f.wind >= 25 ? ` · ${f.wind} km/h wind` : ''}`;
 }
 
-// One line per day for the coach, e.g. "48–61°F; rain likely 3p–6p (70%)".
+// One line per day for the coach, e.g. "9–16°C; rain likely 3p–6p (70%)".
 export function daySummary(date) {
   const hours = db.weather?.hours;
   if (!hours) return '';
@@ -82,5 +83,5 @@ export function daySummary(date) {
   const rain = wet.length
     ? `; rain likely ${fmt(wet[0].h)}–${fmt(wet[wet.length - 1].h + 1)} (up to ${Math.max(...wet.map((d) => d.rain))}%)`
     : '; dry';
-  return `${Math.min(...temps)}–${Math.max(...temps)}°F${rain}`;
+  return `${Math.min(...temps)}–${Math.max(...temps)}°C${rain}`;
 }

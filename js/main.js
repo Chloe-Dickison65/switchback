@@ -260,26 +260,23 @@ function header() {
 
 function hero(ws) {
   const week = getWeek(ws);
-  const { total, done } = P.weekProgress(week);
+  const { total } = P.weekProgress(week);
   const planned = weekRunMiles(week);
   const ran = weekRunMiles(week, { doneOnly: true });
   const streak = P.summitStreak(ws);
-  // Animate the newest marker once you're back on the week (not behind an open sheet).
-  const pop = ui.popWeek === ws && !ui.sheet;
-  if (pop) ui.popWeek = null;
+  // Animate the day's marker once you're back on the week (not behind an open sheet).
+  const pop = ui.popDate && D.mondayOf(ui.popDate) === ws && !ui.sheet ? ui.popDate : null;
+  if (pop) ui.popDate = null;
   return `
     <section class="hero">
-      <div class="hero-main">
-        ${total
-          ? `<div class="hero-count">${done}<small> of ${total}</small></div><div class="hero-label">workouts done</div>`
-          : '<div class="hero-title">New week, new trail</div>'}
-        <div class="hero-msg">${esc(P.trailMessage(week))}</div>
-        <div class="hero-chips">
-          ${planned ? `<span class="mini-chip">${ic('run')} ${ran} of ${planned} mi</span>` : ''}
-          ${streak >= 2 ? `<span class="mini-chip sun">${ic('flag')} ${streak}-week streak</span>` : ''}
-        </div>
-      </div>
+      <div class="hero-title">${total ? esc(P.trailMessage(week)) : 'New week, new trail'}</div>
+      ${total ? '' : `<div class="hero-msg">${esc(P.trailMessage(week))}</div>`}
       ${P.trailSvg(week, { pop })}
+      <div class="hero-chips">
+        ${planned ? `<span class="mini-chip">${ic('run')} ${ran} of ${planned} mi</span>` : ''}
+        ${lockedCount(ws).total ? `<span class="mini-chip">${ic('lock')} ${lockedCount(ws).locked} of ${lockedCount(ws).total} ${lockedCount(ws).total === 1 ? 'day' : 'days'} locked in</span>` : ''}
+        ${streak >= 2 ? `<span class="mini-chip sun">${ic('flag')} ${streak}-week streak</span>` : ''}
+      </div>
     </section>`;
 }
 
@@ -332,53 +329,109 @@ function isCommitted(date) {
   return !!key && week.commits?.[date] === key;
 }
 
+// Days from today on that have planned workouts, and how many of those are locked in.
+function lockedCount(ws) {
+  const days = D.weekDates(ws).filter((d) => d >= D.todayIso()
+    && (getWeek(ws).days[d] || []).some((w) => w.status === 'planned' && w.type !== 'rest'));
+  return { total: days.length, locked: days.filter(isCommitted).length };
+}
+
+const LOCK_LINES = [
+  'Future you says thanks.',
+  'A promise to yourself. Nice.',
+  'On the calendar, in the bag.',
+  'One more switchback up the trail.',
+  'That\'s how summits happen.',
+];
+
+// The "locked in" moment: confetti, a check that draws itself, and the day's plan.
+function celebrateLockIn(date) {
+  const ws = D.mondayOf(date);
+  const items = (getWeek(ws).days[date] || []).filter((w) => w.status === 'planned' && w.type !== 'rest');
+  const lines = items.map((w) => {
+    const f = forecastFor(w, date);
+    return `<li>${ic(TYPES[w.type].icon)} ${esc(w.title)} · ${D.prettyTime(workoutWindow(w).start)}${f ? ` · ${f.temp}°` : ''}</li>`;
+  }).join('');
+  const { locked, total } = lockedCount(ws);
+  const colors = ['var(--accent)', 'var(--sun)', 'var(--run)', 'var(--climb)', 'var(--walk)'];
+  const confetti = Array.from({ length: 36 }, (_, i) => {
+    const angle = (i / 36) * Math.PI * 2 + Math.random() * 0.4;
+    const dist = 120 + Math.random() * 140;
+    return `<i style="--x:${Math.cos(angle) * dist}px;--y:${Math.sin(angle) * dist - 60}px;--r:${Math.random() * 540 - 270}deg;background:${colors[i % colors.length]};animation-delay:${Math.random() * 0.12}s"></i>`;
+  }).join('');
+  const el = document.createElement('div');
+  el.className = 'lockin';
+  el.innerHTML = `
+    <div class="lockin-card">
+      <div class="confetti">${confetti}</div>
+      <svg class="lockin-check" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
+      <h2>${D.DOW_LONG[D.dow(date)]} is locked in!</h2>
+      <ul>${lines}</ul>
+      <p class="lockin-sub">${LOCK_LINES[Math.floor(Math.random() * LOCK_LINES.length)]}</p>
+      <p class="lockin-count">${ic('lock')} ${locked} of ${total} ${total === 1 ? 'day' : 'days'} locked in this week</p>
+    </div>`;
+  document.body.appendChild(el);
+  navigator.vibrate?.([30, 60, 30, 60, 90]);
+  const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 250); };
+  el.addEventListener('click', close);
+  setTimeout(close, 3200);
+}
+
+// The selected day as a small calendar: hours down the side, busy time in gray,
+// workouts as blocks you can press, hold and drag to a new time.
+const PX_PER_MIN = 0.7;
+
 function dayTimeline(date) {
   const ws = D.mondayOf(date);
   const cal = calendarFor(ws);
   const events = (cal?.[date] || []).filter((e) => !e.office);
-  const busy = events.filter((e) => !e.allDay).map((e) => ({ kind: 'busy', s: toMin(e.start), e: toMin(e.end), title: e.title }));
+  const busy = events.filter((e) => !e.allDay).map((e) => ({ s: toMin(e.start), e: toMin(e.end), title: e.title }));
   const wks = (getWeek(ws).days[date] || []).filter((w) => w.type !== 'rest' && w.status !== 'skipped')
-    .map((w) => { const t = workoutWindow(w); return { kind: 'wk', w, s: toMin(t.start), e: toMin(t.end) }; });
+    .map((w) => { const t = workoutWindow(w); return { w, s: toMin(t.start), e: toMin(t.end) }; });
 
-  // Free gaps of 30+ minutes between 6am and 10pm, so you can see where things could move.
-  const gaps = [];
-  let cursor = 6 * 60;
-  for (const b of [...busy, ...wks].sort((a, b) => a.s - b.s)) {
-    if (b.s - cursor >= 30) gaps.push({ kind: 'free', s: cursor, e: b.s });
-    cursor = Math.max(cursor, b.e);
-  }
-  if (22 * 60 - cursor >= 30) gaps.push({ kind: 'free', s: cursor, e: 22 * 60 });
-
-  const rows = [...busy, ...wks, ...gaps].sort((a, b) => a.s - b.s);
+  // Show 6am–10pm, widened to fit anything earlier or later.
+  const start = Math.min(6 * 60, ...[...busy, ...wks].map((x) => Math.floor(x.s / 60) * 60));
+  const end = Math.max(22 * 60, ...[...busy, ...wks].map((x) => Math.ceil(x.e / 60) * 60));
+  const y = (m) => ((m - start) * PX_PER_MIN).toFixed(1);
   const clashWith = (x) => busy.find((b) => x.s < b.e && b.s < x.e);
-  const row = (x) => {
-    if (x.kind === 'busy') return `<div class="tl busy"><time>${span(x.s, x.e)}</time><span>${esc(x.title)}</span></div>`;
-    if (x.kind === 'free') return `<div class="tl free"><time>${span(x.s, x.e)}</time><span>Free</span></div>`;
-    const t = TYPES[x.w.type];
-    const clash = clashWith(x);
-    return `
-      <button class="tl wk-row ${x.w.status === 'done' ? 'done' : ''}" style="--c:${t.color}" data-act="open" data-date="${date}" data-id="${x.w.id}">
-        <time>${span(x.s, x.e)}</time>
-        <span>${ic(t.icon)} ${esc(x.w.title)}</span>
-        ${forecastFor(x.w, date) ? `<em class="wx-line">${ic(W.icon(forecastFor(x.w, date).code))} ${W.label(forecastFor(x.w, date))}</em>` : ''}
-        ${clash ? `<em>${ic('alert-triangle')} Overlaps ${esc(clash.title.toLowerCase())} ${span(clash.s, clash.e)}</em>` : ''}
-      </button>`;
-  };
 
+  const hours = [];
+  for (let h = start / 60; h <= end / 60; h++) {
+    hours.push(`<div class="hr" style="top:${y(h * 60)}px"><span>${h % 12 || 12}${h < 12 || h === 24 ? 'a' : 'p'}</span></div>`);
+  }
+  const busyBlocks = busy.map((b) => `
+    <div class="blk busy" style="top:${y(b.s)}px;height:${Math.max((b.e - b.s) * PX_PER_MIN, 16)}px">
+      <span>${esc(b.title)} · ${span(b.s, b.e)}</span>
+    </div>`).join('');
+  const wkBlocks = wks.map((x) => {
+    const t = TYPES[x.w.type];
+    const f = forecastFor(x.w, date);
+    const draggable = x.w.status === 'planned' && date >= D.todayIso();
+    return `
+      <button class="blk tl-wk ${clashWith(x) ? 'clash' : ''} ${x.w.status === 'done' ? 'done' : ''} ${draggable ? 'movable' : ''}"
+        style="--c:${t.color};top:${y(x.s)}px;height:${Math.max((x.e - x.s) * PX_PER_MIN, 40)}px"
+        data-act="open" data-date="${date}" data-id="${x.w.id}" data-start="${x.s}" data-len="${x.e - x.s}">
+        <b>${ic(t.icon)} ${esc(x.w.title)}</b>
+        <time>${span(x.s, x.e)}</time>
+        ${f ? `<span class="wx">${ic(W.icon(f.code))} ${f.temp}°${f.rain >= 20 ? `<small>${f.rain}%</small>` : ''}</span>` : ''}
+      </button>`;
+  }).join('');
+
+  const clashes = wks.filter((x) => x.w.status === 'planned' && clashWith(x));
   const allDay = events.filter((e) => e.allDay);
   const planned = wks.some((x) => x.w.status === 'planned');
   const committed = isCommitted(date);
   return `
     <div class="timeline">
-      ${!cal && Cal.isConnected() === false && db.settings.googleClientId ? `<p class="hint">Connect Google Calendar to see your busy times here.</p>` : ''}
-      ${!db.settings.googleClientId ? `<p class="hint">Add Google Calendar in Settings to see your busy times here.</p>` : ''}
-      ${allDay.map((e) => `<div class="tl busy"><time>All day</time><span>${esc(e.title)}</span></div>`).join('')}
-      ${rows.map(row).join('')}
-      <p class="hint">Tap a workout to change its time.</p>
+      ${!db.settings.googleClientId ? '<p class="hint">Add Google Calendar in Settings to see your busy times here.</p>' : ''}
+      ${allDay.map((e) => `<div class="allday">${esc(e.title)}</div>`).join('')}
+      <div class="grid" style="height:${y(end)}px" data-start="${start}" data-end="${end}" data-ppm="${PX_PER_MIN}">${hours.join('')}${busyBlocks}${wkBlocks}</div>
+      ${clashes.map((x) => `<div class="warn-line">${ic('alert-triangle')} ${esc(x.w.title)} overlaps busy time ${span(clashWith(x).s, clashWith(x).e)}</div>`).join('')}
+      ${planned && date >= D.todayIso() ? '<p class="hint">Press and hold a workout to drag it to a new time, or tap it to edit.</p>' : ''}
       ${date >= D.todayIso() && planned ? `
         <div class="row commit">
           ${committed
-            ? `<span class="committed">${ic('circle-check')} You're committed to this day</span>`
+            ? `<span class="committed">${ic('lock')} Locked in. Future you says thanks.</span>`
             : `<button class="btn primary" data-act="commit" data-date="${date}">${ic('check')} I'm in</button>
                <button class="btn" data-act="needs-changes" data-date="${date}">Needs changes</button>`}
         </div>` : ''}
@@ -432,7 +485,7 @@ function weekView() {
           <div class="dname">${D.DOW[D.dow(date)]}</div>
           <div class="dnum">${D.parse(date).getDate()}</div>
           ${date === today ? '<span class="badge hot">Today</span>' : ''}
-          ${!selected && isCommitted(date) ? `<span class="badge in">${ic('circle-check')} In</span>` : ''}
+          ${!selected && isCommitted(date) ? `<span class="badge in">${ic('lock')} Locked in</span>` : ''}
           ${office ? `<button class="badge office" data-act="toggle-office" data-date="${date}" title="Tap if you're not in the office this day">${ic('building')} Office ${ic('x')}</button>` : ''}
           ${date < today
             ? `<button class="add log" data-act="add" data-date="${date}">${ic('plus')} Log</button>`
@@ -743,8 +796,8 @@ const actions = {
     changed(D.mondayOf(ui.sheet.date));
     if (w.status === 'done') {
       const ws = D.mondayOf(ui.sheet.date);
-      ui.popWeek = ws;
-      toast(P.doneCheer(getWeek(ws)));
+      ui.popDate = ui.sheet.date;
+      toast(P.doneCheer(getWeek(ws), ui.sheet.date));
     } else {
       render();
     }
@@ -803,7 +856,8 @@ const actions = {
     week.commits = { ...week.commits, [date]: commitKey(week.days[date] || []) };
     save();
     ui.selected = null;
-    toast(`Locked in for ${D.DOW_LONG[D.dow(date)]}. You've got this.`);
+    render();
+    celebrateLockIn(date);
   },
   'needs-changes': (el) => {
     const { date } = el.dataset;
@@ -869,8 +923,8 @@ document.addEventListener('submit', (e) => {
     dayWorkouts(ws, date).push(workout({ ...fields, status: done ? 'done' : 'planned', source: done ? 'logged' : 'plan' }));
     ui.sheet = null;
     changed(ws, done ? '' : `Added ${fields.title} on ${D.DOW[D.dow(date)]}.`);
-    if (done) ui.popWeek = ws;
-    toast(done ? P.doneCheer(getWeek(ws)) : 'Added to plan');
+    if (done) ui.popDate = date;
+    toast(done ? P.doneCheer(getWeek(ws), date) : 'Added to plan');
   } else {
     const w = findWorkout(date, ui.sheet.id);
     const { done, ...fields } = data;
@@ -935,6 +989,13 @@ enableDrag((from, id, to) => {
   db.settings.dragHintSeen = true;
   save();
   toast(`Moved to ${D.DOW_LONG[D.dow(to)]}`);
+}, (date, id, time) => {
+  const w = findWorkout(date, id);
+  w.startTime = time;
+  const hour = Number(time.slice(0, 2));
+  w.timeOfDay = hour < 11 ? 'morning' : hour < 15 ? 'midday' : 'evening';
+  changed(D.mondayOf(date));
+  toast(`${w.title} moved to ${D.prettyTime(time)}`);
 });
 if (Cal.isConnected()) refreshCalendar(ui.weekStart);
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

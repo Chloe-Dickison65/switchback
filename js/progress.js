@@ -1,5 +1,5 @@
-// The week as a trail: each workout is a marker on a switchback path, and
-// finishing every workout you kept on the plan reaches the summit.
+// The week as a trail: each active day is a marker on a switchback path, and
+// finishing every day you planned reaches the summit.
 
 import * as D from './dates.js';
 import { db } from './store.js';
@@ -32,11 +32,19 @@ function pointAt(f) {
   return [124, 28];
 }
 
-// Skipped workouts leave the trail: changing your plan isn't failing it.
+// Progress is counted in days: each day with something planned is one marker on
+// the trail, and it lights up when that day's workouts are done. Stretching is a
+// bonus that never holds a day back. Skipped workouts leave the trail: changing
+// your plan isn't failing it.
 export function weekProgress(week) {
-  const items = Object.values(week?.days || {}).flat().filter((w) => w.type !== 'rest' && w.status !== 'skipped');
-  const done = items.filter((w) => w.status === 'done');
-  return { total: items.length, done: done.length, doneItems: done };
+  const days = Object.keys(week?.days || {}).sort().flatMap((date) => {
+    const items = week.days[date].filter((w) => w.type !== 'rest' && w.status !== 'skipped');
+    if (!items.length) return [];
+    const core = items.filter((w) => w.type !== 'stretch');
+    return [{ date, done: (core.length ? core : items).every((w) => w.status === 'done') }];
+  });
+  const doneItems = Object.values(week?.days || {}).flat().filter((w) => w.status === 'done' && w.type !== 'rest');
+  return { total: days.length, done: days.filter((d) => d.done).length, days, doneItems };
 }
 
 export function isSummit(week) {
@@ -54,17 +62,21 @@ export function summitStreak(weekStart) {
 
 const markerAt = (i, n) => ((i + 0.5) / n) * 0.9;
 
-export function trailSvg(week, { pop = false } = {}) {
-  const { total, done } = weekProgress(week);
+export function trailSvg(week, { pop = null } = {}) {
+  const { total, done, days } = weekProgress(week);
   const summit = done >= 3 && done === total;
   const reach = total === 0 || done === 0 ? 0 : summit ? 100 : markerAt(done - 1, total) * 100;
-  const markers = Array.from({ length: total }, (_, i) => {
+  const markers = days.map((d, i) => {
     const [x, y] = pointAt(markerAt(i, total));
-    const isDone = i < done;
-    return `<circle class="marker ${isDone ? 'done' : ''} ${pop && i === done - 1 ? 'pop' : ''}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isDone ? 5.5 : 4.5}"/>`;
+    // Labels sit above the bottom and top legs, and beside the turns.
+    const onTurn = Math.abs(y - 112) > 2 && Math.abs(y - 70) > 2 && Math.abs(y - 28) > 2;
+    const [lx, ly] = onTurn ? [x + (x > 80 ? 11 : -11), y + 3] : [x, y - 9];
+    return `
+      <circle class="marker ${d.done ? 'done' : ''} ${pop === d.date ? 'pop' : ''}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${d.done ? 5.5 : 4.5}"/>
+      <text class="marker-label ${d.done ? 'done' : ''}" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle">${D.DOW[D.dow(d.date)]}</text>`;
   }).join('');
   return `
-    <svg class="trail ${summit ? 'summited' : ''}" viewBox="0 0 160 130" role="img" aria-label="${done} of ${total} workouts done">
+    <svg class="trail ${summit ? 'summited' : ''}" viewBox="0 0 160 130" role="img" aria-label="${done} of ${total} days done">
       <path d="${TRAIL_D}" class="trail-base"/>
       ${reach > 0 ? `<path d="${TRAIL_D}" class="trail-done" pathLength="100" stroke-dasharray="${reach.toFixed(1)} 100"/>` : ''}
       ${markers}
@@ -73,24 +85,25 @@ export function trailSvg(week, { pop = false } = {}) {
     </svg>`;
 }
 
+const daysWord = (n) => `${n} ${n === 1 ? 'day' : 'days'}`;
+
 export function trailMessage(week) {
   const { total, done } = weekProgress(week);
   if (!total) return 'Plan your week to map out the climb.';
-  if (done >= 3 && done === total) return 'Summit reached. Every workout done.';
-  if (done === 0) return `${total} markers to the summit`;
-  if (done === 1) return 'First steps on the trail';
+  if (done >= 3 && done === total) return 'Summit reached. Every day done.';
+  if (done === 0) return `${daysWord(total)} to the summit`;
   if (done * 2 >= total && (done - 1) * 2 < total) return 'Halfway up. Keep climbing.';
-  const left = total - done;
-  return `${left} more to the summit`;
+  return `${daysWord(total - done)} to the summit`;
 }
 
-// A short, progress-aware cheer for the moment you mark something done.
-export function doneCheer(week) {
-  const { total, done } = weekProgress(week);
-  if (done >= 3 && done === total) return 'Summit! Every workout this week is done.';
-  if (done === 1) return 'First marker of the week. Nice start.';
-  if (done * 2 >= total && (done - 1) * 2 < total) return `Halfway up — ${done} of ${total} done.`;
-  return `Nice work — ${done} of ${total} done.`;
+// A short, progress-aware cheer for the moment you mark something done on `date`.
+export function doneCheer(week, date) {
+  const { total, done, days } = weekProgress(week);
+  const day = D.DOW_LONG[D.dow(date)];
+  if (!days.find((d) => d.date === date)?.done) return `Nice work. Finish the rest of ${day} to light up its marker.`;
+  if (done >= 3 && done === total) return 'Summit! Every day this week is done.';
+  if (done * 2 >= total && (done - 1) * 2 < total) return `${day} done. Halfway up the trail.`;
+  return `${day} done. ${daysWord(total - done)} to the summit.`;
 }
 
 export function weekTotals(week) {

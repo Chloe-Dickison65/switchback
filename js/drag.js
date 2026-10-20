@@ -1,11 +1,17 @@
-// Drag a workout to another day. On touch, press and hold to pick it up (so a
-// normal swipe still scrolls); with a mouse, just drag.
+// Drag a workout to another day, or up and down the day calendar to a new time.
+// On touch, press and hold to pick it up (so a normal swipe still scrolls);
+// with a mouse, just drag.
+
+import { prettyTime } from './dates.js';
 
 const LONG_PRESS_MS = 300;
 const MOVE_SLOP = 8;
 const EDGE = 90; // px from the top/bottom edge where the page auto-scrolls
+const SNAP = 15; // minutes
 
-export function enableDrag(onDrop) {
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+export function enableDrag(onDrop, onTimeDrop) {
   let pending = null; // pressed on a workout, not dragging yet
   let drag = null;    // currently dragging
   let suppressClick = false;
@@ -18,6 +24,7 @@ export function enableDrag(onDrop) {
   }
 
   function begin(x, y) {
+    if (pending.el.matches('.tl-wk')) return beginTime(x, y);
     const { el } = pending;
     pending = null;
     const rect = el.getBoundingClientRect();
@@ -33,7 +40,36 @@ export function enableDrag(onDrop) {
     autoScroll();
   }
 
+  // Dragging a block up or down the day calendar changes its start time.
+  function beginTime(x, y) {
+    const { el } = pending;
+    pending = null;
+    const grid = el.closest('.grid');
+    drag = {
+      time: true, el, x, y, y0: y, scroll0: scrollY,
+      s0: +el.dataset.start, s: +el.dataset.start, len: +el.dataset.len,
+      ppm: +grid.dataset.ppm, gStart: +grid.dataset.start, gEnd: +grid.dataset.end,
+    };
+    el.classList.add('dragging-time');
+    document.body.classList.add('dragging');
+    navigator.vibrate?.(12);
+    autoScroll();
+  }
+
+  function moveTime(x, y) {
+    drag.x = x;
+    drag.y = y;
+    const dy = y - drag.y0 + (scrollY - drag.scroll0);
+    let s = Math.round((drag.s0 + dy / drag.ppm) / SNAP) * SNAP;
+    s = Math.max(drag.gStart, Math.min(drag.gEnd - drag.len, s));
+    if (s === drag.s) return;
+    drag.s = s;
+    drag.el.style.top = `${(s - drag.gStart) * drag.ppm}px`;
+    drag.el.querySelector('time').textContent = `${prettyTime(hhmm(s))}–${prettyTime(hhmm(s + drag.len))}`;
+  }
+
   function move(x, y) {
+    if (drag.time) return moveTime(x, y);
     drag.x = x;
     drag.y = y;
     drag.ghost.style.transform = `translate(${x - drag.dx - parseFloat(drag.ghost.style.left)}px, ${y - drag.dy - parseFloat(drag.ghost.style.top)}px) rotate(-2deg)`;
@@ -63,6 +99,16 @@ export function enableDrag(onDrop) {
       return;
     }
     if (!drag) return;
+    if (drag.time) {
+      const { el, s, s0 } = drag;
+      drag = null;
+      el.classList.remove('dragging-time');
+      document.body.classList.remove('dragging');
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 400);
+      if (s !== s0) onTimeDrop(el.dataset.date, el.dataset.id, hhmm(s));
+      return;
+    }
     const { el, ghost, from, id, target } = drag;
     drag = null;
     ghost.remove();
@@ -76,7 +122,7 @@ export function enableDrag(onDrop) {
 
   // Touch
   document.addEventListener('touchstart', (e) => {
-    const el = e.target.closest('.wk[data-id]');
+    const el = e.target.closest('.wk[data-id], .tl-wk.movable');
     if (el && e.touches.length === 1) press(el, e.touches[0].clientX, e.touches[0].clientY, true);
   }, { passive: true });
   document.addEventListener('touchmove', (e) => {
@@ -94,7 +140,7 @@ export function enableDrag(onDrop) {
 
   // Mouse
   document.addEventListener('mousedown', (e) => {
-    const el = e.button === 0 && e.target.closest('.wk[data-id]');
+    const el = e.button === 0 && e.target.closest('.wk[data-id], .tl-wk.movable');
     if (el) press(el, e.clientX, e.clientY, false);
   });
   document.addEventListener('mousemove', (e) => {
@@ -105,12 +151,12 @@ export function enableDrag(onDrop) {
 
   // A drag shouldn't also count as a tap that opens the workout.
   document.addEventListener('click', (e) => {
-    if (suppressClick && e.target.closest('.wk')) {
+    if (suppressClick && e.target.closest('.wk, .tl-wk')) {
       e.stopPropagation();
       e.preventDefault();
     }
   }, true);
   document.addEventListener('contextmenu', (e) => {
-    if (e.target.closest('.wk')) e.preventDefault();
+    if (e.target.closest('.wk, .tl-wk')) e.preventDefault();
   });
 }
