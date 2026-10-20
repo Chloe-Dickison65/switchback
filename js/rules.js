@@ -1,7 +1,7 @@
 // Workout types, recovery rules, and the starter plan used when the AI coach is off.
 
 import * as D from './dates.js';
-import { uid } from './store.js';
+import { db, uid } from './store.js';
 
 // emoji is used in Google Calendar event titles; icon is the in-app Tabler icon.
 export const TYPES = {
@@ -121,7 +121,10 @@ export function warningsFor(weekStart, week, settings, calendar, prevWeek) {
   return out.filter((w, i) => out.findIndex((x) => x.text === w.text) === i);
 }
 
+// A one-off change for a specific date ("not in the office this Tuesday") beats the weekly setting.
 export function isOfficeDay(date, settings, calendar) {
+  const override = db.weeks[D.mondayOf(date)]?.officeOverrides?.[date];
+  if (override !== undefined) return override;
   if (settings.officeDays.includes(D.dow(date))) return true;
   return (calendar?.[date] || []).some((e) => e.office);
 }
@@ -192,4 +195,14 @@ export function estimateMinutes(w) {
   if (w.type === 'run' && w.distanceMi) return Math.round(w.distanceMi * 11 + 10);
   if (w.type === 'hike' && w.distanceMi) return Math.round(w.distanceMi * 25);
   return { climb: 120, hike: 180, strength: 25, walk: 30, stretch: 10 }[w.type] || 30;
+}
+
+export const DEFAULT_START = { morning: '07:00', midday: '12:00', evening: '18:00', anytime: '10:00' };
+
+// When a workout happens: its own start time, or a sensible default for its time of day.
+export function workoutWindow(w) {
+  const start = w.startTime || DEFAULT_START[w.timeOfDay] || '10:00';
+  const [h, m] = start.split(':').map(Number);
+  const endMin = Math.min(h * 60 + m + estimateMinutes(w), 23 * 60 + 59);
+  return { start, end: `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}` };
 }

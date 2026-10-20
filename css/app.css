@@ -221,3 +221,37 @@ summary { cursor: pointer; font-weight: 600; color: var(--accent-dark); padding:
 body.dragging { cursor: grabbing; }
 .day.drop-target { border: 2px dashed var(--accent); background: var(--accent-soft); }
 .add.log { width: auto; height: 32px; padding: 0 12px; border-radius: 99px; gap: 4px; display: inline-flex; align-items: center; font-weight: 600; font-size: 13px; }
+.badge.office { cursor: pointer; }
+.badge.office .ti-x { font-size: 12px; opacity: .6; }
+
+/* ---------- selected day + day review ---------- */
+.day { cursor: pointer; }
+.day.selected { background: var(--accent-soft); border-color: transparent; box-shadow: 0 6px 18px rgba(23,48,31,.12); }
+.day.today.selected { border: 2px solid var(--accent); }
+.badge.in { background: var(--accent-soft); color: var(--accent-dark); }
+.day.selected .badge:not(.hot) { background: #fff; }
+.events .more { color: var(--accent-dark); font-weight: 600; font-size: 12.5px; padding: 2px 0; }
+.timeline { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.tl { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 10px; font-size: 13.5px; text-align: left; width: 100%; }
+.tl time { color: var(--muted); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.tl.busy { background: #fff; color: var(--text); font-weight: 500; }
+.tl.free { background: transparent; color: var(--muted); padding: 2px 10px; font-size: 12.5px; }
+.tl.wk-row { background: color-mix(in srgb, var(--c) 16%, #fff); border-left: 4px solid var(--c); border-radius: 0 10px 10px 0; font-weight: 600; }
+.tl.wk-row span { display: flex; align-items: center; gap: 6px; }
+.tl.wk-row span .ti { color: var(--c); font-size: 17px; }
+.tl.wk-row.done { opacity: .6; }
+.tl.wk-row em { grid-column: 1 / -1; font-style: normal; font-size: 12px; color: var(--warn-text); display: flex; gap: 4px; align-items: center; }
+.commit { margin-top: 8px; }
+.commit .btn { flex: 1; }
+.committed { display: flex; align-items: center; gap: 6px; color: var(--accent-dark); font-weight: 600; }
+
+/* ---------- weather ---------- */
+.wx { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 600; color: var(--text); background: rgba(255,255,255,.75); border-radius: 99px; padding: 3px 8px; white-space: nowrap; }
+.wx .ti { font-size: 15px; color: #c08a00; }
+.wx small { color: #3a7bbf; font-weight: 600; margin-left: 2px; }
+.tl .wx-line { grid-column: 1 / -1; font-style: normal; font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; font-weight: 500; }
+.tl .wx-line .ti { color: #c08a00; font-size: 14px; }
+.place { align-items: center; gap: 6px; }
+.place .ti { color: var(--accent); font-size: 18px; }
+.place .link { margin-left: auto; }
+.place-form input { flex: 1; padding: 11px 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); font-size: 15px; min-width: 0; }

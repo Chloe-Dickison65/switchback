@@ -3,7 +3,7 @@
 
 import * as D from './dates.js';
 import { db, save } from './store.js';
-import { TYPES, estimateMinutes } from './rules.js';
+import { TYPES, estimateMinutes, DEFAULT_START } from './rules.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly', // which calendars you have (names only)
@@ -16,7 +16,6 @@ const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 // Google Calendar event colors that roughly match the app.
 const COLOR_IDS = { run: '6', climb: '3', hike: '10', strength: '5', walk: '7', stretch: '4' };
-const DEFAULT_START = { morning: '07:00', midday: '12:00', evening: '18:00', anytime: '10:00' };
 
 export class AuthNeeded extends Error {}
 

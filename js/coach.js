@@ -3,6 +3,7 @@
 import * as D from './dates.js';
 import { db, save } from './store.js';
 import { TYPE_KEYS, summary, weekRunMiles } from './rules.js';
+import { daySummary } from './weather.js';
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm';
 const MODEL = 'claude-haiku-5-5';
@@ -54,6 +55,7 @@ How to answer:
 - reply: plain text, energetic and warm, at most 70 words. No markdown. When planning a new week, give a 1–2 sentence overview and ask at most 2 quick questions if something important is unknown (e.g. how they feel after a big hike, what the weekend hike might be).
 - plan_changed: true only if you are returning an updated plan.
 - days: if plan_changed, only the days you are changing, each with its complete new list of workouts (use an empty list to clear a day). Leave out days that stay the same. Never change days before TODAY or anything marked done/skipped. When planning a week from scratch, include every day from TODAY on. If plan_changed is false, return an empty list.
+- office_overrides: when they say a specific date is or isn't an office day (e.g. "I'm not going in Tuesday", "office Thursday this week"), list that date with office true or false. Plan that day to match in the same answer. Otherwise an empty list.
 - log_entries: activities they say they already did that are not in RECENT ACTIVITY or CURRENT PLAN as done (e.g. "I hiked 4 mi with 2,000 ft yesterday"). feel is 1 (wrecked) to 5 (great), or null if not said. Otherwise an empty list.
 - Titles are short (2–3 words, e.g. "Easy run", "Tempo run", "Bodyweight strength", "Lunch walk"). detail is one concrete line.`;
 
@@ -76,7 +78,7 @@ const WORKOUT = {
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['reply', 'plan_changed', 'days', 'log_entries'],
+  required: ['reply', 'plan_changed', 'days', 'office_overrides', 'log_entries'],
   properties: {
     reply: { type: 'string' },
     plan_changed: { type: 'boolean' },
@@ -87,6 +89,15 @@ const SCHEMA = {
         additionalProperties: false,
         required: ['date', 'workouts'],
         properties: { date: { type: 'string', format: 'date' }, workouts: { type: 'array', items: WORKOUT } },
+      },
+    },
+    office_overrides: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['date', 'office'],
+        properties: { date: { type: 'string', format: 'date' }, office: { type: 'boolean' } },
       },
     },
     log_entries: {
@@ -153,6 +164,9 @@ function buildContext({ weekStart, calendar, isOffice, warnings }) {
     `RUN MILES COMPLETED THE WEEK BEFORE: ${weekRunMiles(prev, { doneOnly: true }) || 'unknown (assume about 5)'}`,
     `RECENT ACTIVITY (last 14 days):\n${recent.join('\n') || 'nothing logged'}`,
     `CALENDAR:\n${describeCalendar(weekStart, calendar, isOffice)}`,
+    db.settings.weatherPlace && db.weather
+      ? `WEATHER (${db.settings.weatherPlace.name}; prefer dry, mild hours for outdoor runs, hikes and walks):\n${D.weekDates(weekStart).map((d) => `${D.DOW[D.dow(d)]} ${d}: ${daySummary(d) || 'no forecast yet'}`).join('\n')}`
+      : '',
     `CURRENT PLAN:\n${D.weekDates(weekStart).map((d) => describeDay(d, week.days[d])).join('\n')}`,
     warnings.length ? `RULE CHECK WARNINGS:\n${warnings.map((w) => `- ${w.text}`).join('\n')}` : '',
     week.manualChange ? `CHANGES I MADE MYSELF (keep these): ${week.manualChange}` : '',
@@ -236,6 +250,7 @@ export async function ask({ weekStart, text, calendar, isOffice, warnings, onRep
   return {
     reply: out.reply,
     days: out.plan_changed ? out.days : null,
+    officeOverrides: out.office_overrides || [],
     logEntries: out.log_entries || [],
     cost,
   };

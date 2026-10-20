@@ -13,11 +13,13 @@ const DEFAULTS = {
     nightBeforeNudge: true,
     workoutsCalendarId: '',
     sundayReminderId: '',
+    weatherPlace: null, // { name, lat, lon } typed in Settings
   },
   weeks: {},    // weekStart -> { days: { date: [workout] }, manualChange, synced }
   chats: {},    // weekStart -> [{ role, text, ts, cost }]
   usage: [],    // [{ ts, usd, input, output }]
   calCache: {}, // weekStart -> { date: [event] }
+  weather: null,  // cached hourly forecast
 };
 
 function load() {

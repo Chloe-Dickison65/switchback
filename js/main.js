@@ -1,10 +1,11 @@
 import * as D from './dates.js';
 import { db, save, getWeek, dayWorkouts, hasPlan, exportData, importData } from './store.js';
-import { TYPES, TYPE_KEYS, workout, warningsFor, isOfficeDay, starterWeek, summary, weekRunMiles } from './rules.js';
+import { TYPES, TYPE_KEYS, workout, warningsFor, isOfficeDay, starterWeek, summary, weekRunMiles, workoutWindow } from './rules.js';
 import * as Cal from './calendar.js';
 import * as Coach from './coach.js';
 import * as P from './progress.js';
 import { enableDrag } from './drag.js';
+import * as W from './weather.js';
 
 const ui = {
   view: 'week',
@@ -183,6 +184,7 @@ async function sendToCoach(text) {
     chat.push({ role: 'user', text, ts: Date.now() });
     chat.push({ role: 'assistant', text: res.reply, ts: Date.now(), cost: res.cost, planChanged: !!res.days, logged: res.logEntries.length });
     res.logEntries.forEach(addLogEntry);
+    for (const { date, office } of res.officeOverrides) setOfficeDay(date, office);
     if (res.days) {
       applyPlan(ws, res.days);
       getWeek(ws).manualChange = '';
@@ -312,13 +314,92 @@ function eventLine(e) {
   return `<li class="${e.free ? 'free' : ''}"><time>${when}</time> ${esc(e.title)}</li>`;
 }
 
+// ---------- day review: calendar + workouts on one timeline ----------
+
+const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+const fromMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const span = (s, e) => `${D.prettyTime(fromMin(s))}–${D.prettyTime(fromMin(e))}`;
+
+// A commitment is to a specific set of workouts at specific times; changing them un-commits the day.
+function commitKey(list) {
+  return list.filter((w) => w.status === 'planned' && w.type !== 'rest')
+    .map((w) => `${w.id}@${workoutWindow(w).start}`).sort().join('|');
+}
+
+function isCommitted(date) {
+  const week = getWeek(D.mondayOf(date));
+  const key = commitKey(week.days[date] || []);
+  return !!key && week.commits?.[date] === key;
+}
+
+function dayTimeline(date) {
+  const ws = D.mondayOf(date);
+  const cal = calendarFor(ws);
+  const events = (cal?.[date] || []).filter((e) => !e.office);
+  const busy = events.filter((e) => !e.allDay).map((e) => ({ kind: 'busy', s: toMin(e.start), e: toMin(e.end), title: e.title }));
+  const wks = (getWeek(ws).days[date] || []).filter((w) => w.type !== 'rest' && w.status !== 'skipped')
+    .map((w) => { const t = workoutWindow(w); return { kind: 'wk', w, s: toMin(t.start), e: toMin(t.end) }; });
+
+  // Free gaps of 30+ minutes between 6am and 10pm, so you can see where things could move.
+  const gaps = [];
+  let cursor = 6 * 60;
+  for (const b of [...busy, ...wks].sort((a, b) => a.s - b.s)) {
+    if (b.s - cursor >= 30) gaps.push({ kind: 'free', s: cursor, e: b.s });
+    cursor = Math.max(cursor, b.e);
+  }
+  if (22 * 60 - cursor >= 30) gaps.push({ kind: 'free', s: cursor, e: 22 * 60 });
+
+  const rows = [...busy, ...wks, ...gaps].sort((a, b) => a.s - b.s);
+  const clashWith = (x) => busy.find((b) => x.s < b.e && b.s < x.e);
+  const row = (x) => {
+    if (x.kind === 'busy') return `<div class="tl busy"><time>${span(x.s, x.e)}</time><span>${esc(x.title)}</span></div>`;
+    if (x.kind === 'free') return `<div class="tl free"><time>${span(x.s, x.e)}</time><span>Free</span></div>`;
+    const t = TYPES[x.w.type];
+    const clash = clashWith(x);
+    return `
+      <button class="tl wk-row ${x.w.status === 'done' ? 'done' : ''}" style="--c:${t.color}" data-act="open" data-date="${date}" data-id="${x.w.id}">
+        <time>${span(x.s, x.e)}</time>
+        <span>${ic(t.icon)} ${esc(x.w.title)}</span>
+        ${forecastFor(x.w, date) ? `<em class="wx-line">${ic(W.icon(forecastFor(x.w, date).code))} ${W.label(forecastFor(x.w, date))}</em>` : ''}
+        ${clash ? `<em>${ic('alert-triangle')} Overlaps ${esc(clash.title.toLowerCase())} ${span(clash.s, clash.e)}</em>` : ''}
+      </button>`;
+  };
+
+  const allDay = events.filter((e) => e.allDay);
+  const planned = wks.some((x) => x.w.status === 'planned');
+  const committed = isCommitted(date);
+  return `
+    <div class="timeline">
+      ${!cal && Cal.isConnected() === false && db.settings.googleClientId ? `<p class="hint">Connect Google Calendar to see your busy times here.</p>` : ''}
+      ${!db.settings.googleClientId ? `<p class="hint">Add Google Calendar in Settings to see your busy times here.</p>` : ''}
+      ${allDay.map((e) => `<div class="tl busy"><time>All day</time><span>${esc(e.title)}</span></div>`).join('')}
+      ${rows.map(row).join('')}
+      <p class="hint">Tap a workout to change its time.</p>
+      ${date >= D.todayIso() && planned ? `
+        <div class="row commit">
+          ${committed
+            ? `<span class="committed">${ic('circle-check')} You're committed to this day</span>`
+            : `<button class="btn primary" data-act="commit" data-date="${date}">${ic('check')} I'm in</button>
+               <button class="btn" data-act="needs-changes" data-date="${date}">Needs changes</button>`}
+        </div>` : ''}
+    </div>`;
+}
+
+// Forecast at the hour an outdoor workout starts, if it's still coming up.
+function forecastFor(w, date) {
+  if (!W.OUTDOOR.has(w.type) || w.status !== 'planned') return null;
+  return W.at(date, workoutWindow(w).start);
+}
+
 function workoutButton(w, date) {
   const t = TYPES[w.type] || TYPES.walk;
   const meta = summary(w);
+  const f = forecastFor(w, date);
   return `
     <button class="wk s-${w.status}" style="--c:${t.color}" data-act="open" data-date="${date}" data-id="${w.id}">
       <span class="wk-icon">${ic(t.icon)}</span>
       <span class="wk-main"><b>${esc(w.title || t.label)}</b>${meta ? `<small>${esc(meta)}</small>` : ''}</span>
+      ${f ? `<span class="wx">${ic(W.icon(f.code))} ${f.temp}°${f.rain >= 20 ? `<small>${f.rain}%</small>` : ''}</span>` : ''}
       <span class="wk-check">${w.status === 'done' ? (w.feel ? FEELS[w.feel - 1] : ic('check')) : w.status === 'skipped' ? '–' : ''}</span>
     </button>`;
 }
@@ -343,20 +424,23 @@ function weekView() {
     const list = week.days[date] || [];
     const events = (cal?.[date] || []).map(eventLine).filter(Boolean);
     const dayWarn = warnings.filter((w) => w.date === date);
+    const selected = ui.selected === date;
     const office = isOfficeDay(date, db.settings, cal);
     return `
-      <section class="day ${date === today ? 'today' : ''} ${date < today ? 'past' : ''}" data-date="${date}">
+      <section class="day ${date === today ? 'today' : ''} ${date < today ? 'past' : ''} ${selected ? 'selected' : ''}" data-date="${date}" data-act="select-day">
         <div class="day-head">
           <div class="dname">${D.DOW[D.dow(date)]}</div>
           <div class="dnum">${D.parse(date).getDate()}</div>
           ${date === today ? '<span class="badge hot">Today</span>' : ''}
-          ${office ? `<span class="badge">${ic('building')} Office</span>` : ''}
+          ${!selected && isCommitted(date) ? `<span class="badge in">${ic('circle-check')} In</span>` : ''}
+          ${office ? `<button class="badge office" data-act="toggle-office" data-date="${date}" title="Tap if you're not in the office this day">${ic('building')} Office ${ic('x')}</button>` : ''}
           ${date < today
             ? `<button class="add log" data-act="add" data-date="${date}">${ic('plus')} Log</button>`
             : `<button class="add" data-act="add" data-date="${date}" aria-label="Add to ${D.DOW[D.dow(date)]}">${ic('plus')}</button>`}
         </div>
-        ${events.length ? `<ul class="events">${events.slice(0, 3).join('')}${events.length > 3 ? `<li class="more">+${events.length - 3} more</li>` : ''}</ul>` : ''}
-        <div class="wks">${list.map((w) => workoutButton(w, date)).join('') || `<div class="empty">${office ? 'Office day — no workouts' : date < today ? 'Nothing logged' : 'Nothing planned'}</div>`}</div>
+        ${selected ? dayTimeline(date) : `
+          ${events.length ? `<ul class="events">${events.slice(0, 3).join('')}${events.length > 3 ? `<li><button class="more" data-act="select-day" data-date="${date}">+${events.length - 3} more</button></li>` : ''}</ul>` : ''}
+          <div class="wks">${list.map((w) => workoutButton(w, date)).join('') || `<div class="empty">${office ? 'Office day — no workouts' : date < today ? 'Nothing logged' : 'Nothing planned'}</div>`}</div>`}
         ${dayWarn.map((w) => `<div class="warn-line">${ic('alert-triangle')} ${esc(w.text)}</div>`).join('')}
       </section>`;
   }).join('');
@@ -466,6 +550,14 @@ function settingsView() {
       </section>
 
       <section class="card">
+        <h3>${ic('sun')} Weather</h3>
+        <p class="hint">Shows the forecast at the hour of your outdoor workouts. Uses the place you type here, never your phone's location.</p>
+        ${s.weatherPlace
+          ? `<div class="row place">${ic('map-pin')} <b>${esc(s.weatherPlace.name)}</b><button class="link" data-act="weather-clear">Change</button></div>`
+          : `<form data-form="weather" class="row place-form"><input name="place" placeholder="City or ZIP code" autocomplete="off"><button class="btn primary">Set</button></form>`}
+      </section>
+
+      <section class="card">
         <h3>${ic('database')} Your data</h3>
         <p class="hint">Everything lives on this phone. Back it up now and then.</p>
         <div class="row">
@@ -509,7 +601,8 @@ function sheet() {
   const dayName = `${D.DOW_LONG[D.dow(s.date)]}, ${D.shortDate(s.date)}`;
   let body;
   if (s.kind === 'add') {
-    body = `<div class="sheet-kicker">${s.date < D.todayIso() ? 'Log' : 'Add'} · ${esc(dayName)}</div>${workoutForm(workout({ type: s.type || 'run', title: '' }), s.date, true)}`;
+    body = `<div class="sheet-kicker">${s.date < D.todayIso() ? 'Log' : 'Add'} · ${esc(dayName)}</div>${workoutForm(workout({ type: s.type || 'run', title: '' }), s.date, true)}
+      <button class="btn wide" data-act="toggle-office" data-date="${s.date}">${ic('building')} ${isOfficeDay(s.date, db.settings, calendarFor(D.mondayOf(s.date))) ? 'Not an office day' : 'Mark as office day'}</button>`;
   } else {
     const w = findWorkout(s.date, s.id);
     if (!w) { ui.sheet = null; return ''; }
@@ -590,6 +683,26 @@ function readForm(form) {
     detail: (f.get('detail') || '').trim(),
     done: f.get('done') === 'on',
   };
+}
+
+// Office day or not, for this one date only (the weekly setting stays as is).
+function setOfficeDay(date, office) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+  const week = getWeek(D.mondayOf(date));
+  week.officeOverrides = { ...week.officeOverrides, [date]: office };
+  save();
+}
+
+async function setWeatherPlace(query) {
+  if (!query.trim()) return;
+  try {
+    db.settings.weatherPlace = await W.findPlace(query);
+    save();
+    await W.refresh({ force: true });
+    toast(`Weather set to ${db.settings.weatherPlace.name}`);
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function moveWorkout(date, id, to) {
@@ -673,6 +786,43 @@ const actions = {
       toast(e.message);
     }
   },
+  'weather-clear': () => {
+    db.settings.weatherPlace = null;
+    db.weather = null;
+    save();
+    render();
+  },
+  'select-day': (el) => {
+    const date = el.dataset.date || el.closest('.day')?.dataset.date;
+    ui.selected = ui.selected === date && el.matches('.day') ? null : date;
+    render();
+  },
+  commit: (el) => {
+    const { date } = el.dataset;
+    const week = getWeek(D.mondayOf(date));
+    week.commits = { ...week.commits, [date]: commitKey(week.days[date] || []) };
+    save();
+    ui.selected = null;
+    toast(`Locked in for ${D.DOW_LONG[D.dow(date)]}. You've got this.`);
+  },
+  'needs-changes': (el) => {
+    const { date } = el.dataset;
+    ui.selected = null;
+    ui.view = 'coach';
+    ui.draft = `${D.DOW_LONG[D.dow(date)]} doesn't work as planned: `;
+    render();
+    const ta = document.querySelector('[data-draft]');
+    ta?.focus();
+    ta?.setSelectionRange(ui.draft.length, ui.draft.length);
+  },
+  'toggle-office': (el) => {
+    const { date } = el.dataset;
+    const office = !isOfficeDay(date, db.settings, calendarFor(D.mondayOf(date)));
+    setOfficeDay(date, office);
+    ui.sheet = null;
+    changed(D.mondayOf(date), `${D.DOW_LONG[D.dow(date)]} is ${office ? 'now an office day' : 'no longer an office day'} this week.`);
+    toast(office ? `${D.DOW_LONG[D.dow(date)]} marked as an office day` : `${D.DOW_LONG[D.dow(date)]} isn't an office day this week`);
+  },
   office: (el) => {
     const d = Number(el.dataset.dow);
     const set = new Set(db.settings.officeDays);
@@ -710,6 +860,7 @@ document.addEventListener('submit', (e) => {
   e.preventDefault();
   const form = e.target;
   if (form.dataset.form === 'chat') return sendToCoach(form.text.value);
+  if (form.dataset.form === 'weather') return setWeatherPlace(form.place.value);
   const data = readForm(form);
   const { date } = ui.sheet;
   const ws = D.mondayOf(date);
@@ -778,6 +929,7 @@ document.addEventListener('toggle', (e) => {
 
 render();
 Coach.warmUp();
+W.refresh().then((updated) => updated && render({ background: true })).catch(() => {});
 enableDrag((from, id, to) => {
   moveWorkout(from, id, to);
   db.settings.dragHintSeen = true;
